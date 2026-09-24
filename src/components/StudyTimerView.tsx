@@ -42,7 +42,10 @@ import {
   MicOff,
   Languages,
   Palette,
-  MessageSquare
+  MessageSquare,
+  Target,
+  AlertTriangle,
+  Flame
 } from 'lucide-react';
 import { 
   Subject, 
@@ -58,7 +61,9 @@ import {
 import { apiGenerateBlurtPrompt, apiEvaluateBlurtRecall } from '../lib/aiApi';
 import { compressImageFile } from '../lib/base64Utils';
 import { addMistake } from '../lib/mistakeVaultStorage';
+import { recordTopicRecallOutcome } from '../lib/retentionGraphStorage';
 import { generateCompletedWorkWhatsAppMessage, buildWhatsAppDirectUrl } from '../lib/whatsappHelper';
+import { TargetedRemediationDrillModal } from './TargetedRemediationDrillModal';
 import { 
   sendStudySessionEmail, 
   sendDailyCompletedWorkEmail, 
@@ -224,6 +229,7 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
   } | null>(null);
   const [socraticMistakeLogged, setSocraticMistakeLogged] = useState<boolean>(false);
   const [loggedMistakeGaps, setLoggedMistakeGaps] = useState<Record<number, boolean>>({});
+  const [isDrillModalOpen, setIsDrillModalOpen] = useState<boolean>(false);
 
   // Update chapter/topic dropdowns when subject/chapter/topic props change
   useEffect(() => {
@@ -652,6 +658,14 @@ Return JSON formatted with:
           diagramNotes: result.diagramNotes || result.evaluation.diagramNotes || undefined
         };
         setBlurtEvaluation(evalData);
+
+        // Record Ebbinghaus retention outcome
+        recordTopicRecallOutcome(
+          evalData.subjectName,
+          evalData.topicName,
+          evalData.recallScore,
+          evalData.knowledgeGaps.length
+        );
 
         // Automatically log activity to history
         if (onLogActivity) {
@@ -2441,12 +2455,15 @@ Return JSON formatted with:
                     <span>Recalled Concepts ({blurtEvaluation.recalledConcepts.length})</span>
                   </div>
                   <ul className="space-y-1.5 text-xs text-primary">
-                    {blurtEvaluation.recalledConcepts.map((c, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className="text-emerald-600 mt-0.5">•</span>
-                        <span>{c}</span>
-                      </li>
-                    ))}
+                    {blurtEvaluation.recalledConcepts.map((c, i) => {
+                      const title = typeof c === 'string' ? c : (c.concept + (c.detail ? `: ${c.detail}` : ''));
+                      return (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="text-emerald-600 mt-0.5">•</span>
+                          <span>{title}</span>
+                        </li>
+                      );
+                    })}
                     {blurtEvaluation.recalledConcepts.length === 0 && (
                       <li className="text-xs text-muted italic">No key concepts identified in this attempt.</li>
                     )}
@@ -2497,6 +2514,98 @@ Return JSON formatted with:
                   </div>
                 </div>
               </div>
+
+              {/* Deep Diagnostic Autopsy: Why were you unable to explain to the fullest & Exam Backlashes */}
+              {(blurtEvaluation.whyUnableToExplain || (blurtEvaluation.backlashesAndPitfalls && blurtEvaluation.backlashesAndPitfalls.length > 0) || (blurtEvaluation.keyConceptsMissed && blurtEvaluation.keyConceptsMissed.length > 0)) && (
+                <div className="p-4 rounded-2xl bg-amber-500/5 dark:bg-amber-500/10 border border-amber-500/20 space-y-3.5">
+                  <div className="flex items-center justify-between gap-2 border-b border-amber-500/20 pb-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-amber-800 dark:text-amber-300">
+                      <Target className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span>Diagnostic Autopsy: Why You Couldn't Explain Fully &amp; Exam Backlashes</span>
+                    </div>
+                    <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-900 dark:text-amber-200 font-bold">
+                      Root Cause Analysis
+                    </span>
+                  </div>
+
+                  {/* Why unable to explain to the fullest */}
+                  {blurtEvaluation.whyUnableToExplain && (
+                    <div className="space-y-1 text-xs">
+                      <div className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                        <HelpCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                        <span>Why you struggled to explain this topic to the fullest:</span>
+                      </div>
+                      <p className="text-primary leading-relaxed pl-5 bg-background/50 p-2 rounded-xl border border-amber-500/10">
+                        {blurtEvaluation.whyUnableToExplain}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Missing Essentials */}
+                  {blurtEvaluation.keyConceptsMissed && blurtEvaluation.keyConceptsMissed.length > 0 && (
+                    <div className="space-y-1.5 text-xs">
+                      <div className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                        <span>What was missing from your explanation ({blurtEvaluation.keyConceptsMissed.length}):</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 pl-5">
+                        {blurtEvaluation.keyConceptsMissed.map((item, idx) => (
+                          <span
+                            key={idx}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-background text-rose-700 dark:text-rose-300 border border-rose-500/30 text-[11px] font-medium"
+                          >
+                            <span className="text-rose-500 font-bold">✕</span> {item}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Exam Backlashes / Marking Deductions */}
+                  {blurtEvaluation.backlashesAndPitfalls && blurtEvaluation.backlashesAndPitfalls.length > 0 && (
+                    <div className="space-y-1.5 text-xs">
+                      <div className="font-bold text-rose-800 dark:text-rose-300 flex items-center gap-1.5">
+                        <Flame className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                        <span>Board Exam Backlashes &amp; Penalty Deductions:</span>
+                      </div>
+                      <ul className="space-y-1 pl-5 text-[11px] text-primary">
+                        {blurtEvaluation.backlashesAndPitfalls.map((penalty, idx) => (
+                          <li key={idx} className="flex items-start gap-2 bg-rose-500/5 dark:bg-rose-500/10 p-2 rounded-lg border border-rose-500/15">
+                            <span className="text-rose-600 dark:text-rose-400 font-bold shrink-0">⚠️</span>
+                            <span>{penalty}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Recommended Immediate Remediation & Option 4 Micro-Drill Re-attempt */}
+                  <div className="mt-2 pt-2 border-t border-amber-500/15 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+                    {blurtEvaluation.recommendedRemediation ? (
+                      <div className="flex items-center gap-2 text-xs bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl text-emerald-900 dark:text-emerald-200 flex-1">
+                        <Zap className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <div>
+                          <span className="font-bold mr-1.5">Direct Action to Fix This:</span>
+                          <span>{blurtEvaluation.recommendedRemediation}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-muted">
+                        Test and cement your missed essentials instantly:
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setIsDrillModalOpen(true)}
+                      className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition flex items-center gap-1.5 shrink-0 shadow-2xs cursor-pointer active:scale-95"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Launch 2-Min Targeted Drill</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Diagram / OCR Handwritten Notes Feedback if present */}
               {blurtEvaluation.diagramNotes && (
@@ -2833,6 +2942,17 @@ Return JSON formatted with:
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Targeted 2-Minute Remediation Drill Modal (Option 4) */}
+      <TargetedRemediationDrillModal
+        isOpen={isDrillModalOpen}
+        onClose={() => setIsDrillModalOpen(false)}
+        subjectName={selectedSubjectName}
+        topicName={selectedTopicName}
+        sourceContext="Blurt Recall Autopsy"
+        diagnosedRootCause={blurtEvaluation?.whyUnableToExplain || 'Concepts missed during active recall blurt'}
+        missingConcepts={blurtEvaluation?.keyConceptsMissed || blurtEvaluation?.knowledgeGaps.map(g => g.concept) || []}
+      />
     </motion.div>
   );
 };

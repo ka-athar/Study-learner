@@ -147,6 +147,9 @@ import { EditYearProfileModal } from './components/EditYearProfileModal';
 import { DeviceEmailSyncModal } from './components/DeviceEmailSyncModal';
 import { ExaminersRedPenView } from './components/ExaminersRedPenView';
 import { MistakeVaultView } from './components/MistakeVaultView';
+import { RetentionHeatmapModal } from './components/RetentionHeatmapModal';
+import { SpacedRepetitionMorningWarmupModal } from './components/SpacedRepetitionMorningWarmupModal';
+import { TargetedRemediationDrillModal } from './components/TargetedRemediationDrillModal';
 import { GeminiNotebookHub } from './components/GeminiNotebookHub';
 import { ExamBossBattleView } from './components/ExamBossBattleView';
 import { KnowledgeGraphExplorerView } from './components/KnowledgeGraphExplorerView';
@@ -203,6 +206,12 @@ export default function App() {
   const [isVoiceFeynmanModalOpen, setIsVoiceFeynmanModalOpen] = useState(false);
   const [isKnowledgeTreeModalOpen, setIsKnowledgeTreeModalOpen] = useState(false);
   const [isPredictiveGradeModalOpen, setIsPredictiveGradeModalOpen] = useState(false);
+  const [isRetentionGraphModalOpen, setIsRetentionGraphModalOpen] = useState(false);
+  const [isMorningWarmupModalOpen, setIsMorningWarmupModalOpen] = useState(false);
+  const [isRemediationDrillModalOpen, setIsRemediationDrillModalOpen] = useState(false);
+  const [drillTargetMistakeId, setDrillTargetMistakeId] = useState<string | undefined>(undefined);
+  const [drillTargetSubject, setDrillTargetSubject] = useState<string>('Physics');
+  const [drillTargetTopic, setDrillTargetTopic] = useState<string>('Core Concepts');
   const [feynmanInitialSubject, setFeynmanInitialSubject] = useState<string | undefined>(undefined);
   const [feynmanInitialConcept, setFeynmanInitialConcept] = useState<string | undefined>(undefined);
   const [rpgProfile, setRpgProfile] = useState<StudyRPGProfile>(() => loadRPGProfile());
@@ -2122,6 +2131,8 @@ export default function App() {
           setAudioStudyInitialMode('voice_flashcards');
           setIsAudioStudyModalOpen(true);
         }}
+        onOpenRetentionGraph={() => setIsRetentionGraphModalOpen(true)}
+        onOpenMorningWarmup={() => setIsMorningWarmupModalOpen(true)}
         onOpenBackupRestore={() => setIsBackupRestoreModalOpen(true)}
         onForceSaveCloud={handleForceSaveCloud}
         onSignOut={handleSignOut}
@@ -2623,6 +2634,7 @@ export default function App() {
           <ExaminersRedPenView
             subjects={subjects}
             onNavigateToMistakeVault={() => setActiveTab('mistake_vault')}
+            onNavigateToTests={() => setActiveTab('tests')}
             onAwardXP={handleAwardXP}
           />
         )}
@@ -2631,7 +2643,16 @@ export default function App() {
           <MistakeVaultView
             subjects={subjects}
             onNavigateToRedPen={() => setActiveTab('examiner_red_pen')}
+            onOpenRetentionGraph={() => setIsRetentionGraphModalOpen(true)}
+            onOpenMorningWarmup={() => setIsMorningWarmupModalOpen(true)}
+            onStartDrill={(mistakeId, subjectName, topicName) => {
+              setDrillTargetMistakeId(mistakeId);
+              if (subjectName) setDrillTargetSubject(subjectName);
+              if (topicName) setDrillTargetTopic(topicName);
+              setIsRemediationDrillModalOpen(true);
+            }}
             onAwardXP={handleAwardXP}
+            onSaveTestResult={handleAddTestResult}
           />
         )}
 
@@ -3030,6 +3051,45 @@ export default function App() {
             type: 'success'
           });
         }}
+        onExportToFlashcards={async (deck) => {
+          await handleSaveFlashcardDeck(deck);
+          setActionBanner({
+            message: `🗂️ Flashcard Deck "${deck.title}" (${deck.cards.length} cards) generated & saved!`,
+            type: 'success'
+          });
+        }}
+      />
+
+      {/* Forgetting Curve Retention Heatmap Modal */}
+      <RetentionHeatmapModal
+        isOpen={isRetentionGraphModalOpen}
+        onClose={() => setIsRetentionGraphModalOpen(false)}
+        subjects={subjects}
+        onStartDrillForTopic={(subjectName, topicName) => {
+          setDrillTargetSubject(subjectName);
+          setDrillTargetTopic(topicName);
+          setDrillTargetMistakeId(undefined);
+          setIsRemediationDrillModalOpen(true);
+        }}
+      />
+
+      {/* Daily Spaced Repetition Morning Warmup Modal */}
+      <SpacedRepetitionMorningWarmupModal
+        isOpen={isMorningWarmupModalOpen}
+        onClose={() => setIsMorningWarmupModalOpen(false)}
+        onAwardXP={handleAwardXP}
+      />
+
+      {/* 2-Minute Targeted Remediation Drill Modal */}
+      <TargetedRemediationDrillModal
+        isOpen={isRemediationDrillModalOpen}
+        onClose={() => setIsRemediationDrillModalOpen(false)}
+        subjectName={drillTargetSubject}
+        topicName={drillTargetTopic}
+        sourceContext={drillTargetMistakeId ? 'Mistake Vault Autopsy' : 'Spaced Retention Ebbinghaus Curve'}
+        diagnosedRootCause="Exam trap recovery and rapid active retrieval"
+        missingConcepts={[]}
+        onAwardXP={handleAwardXP}
       />
 
       {/* Global Command Palette (Cmd + K / Ctrl + K) */}

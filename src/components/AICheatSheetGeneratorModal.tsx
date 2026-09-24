@@ -17,9 +17,12 @@ import {
   FolderPlus,
   RefreshCw,
   Clock,
-  ArrowRight
+  ArrowRight,
+  Image as ImageIcon,
+  Palette,
+  Brain
 } from 'lucide-react';
-import { Subject, Topic } from '../types';
+import { Subject, Topic, FlashcardDeck, Flashcard } from '../types';
 import { apiGenerateCheatSheet } from '../lib/aiApi';
 
 interface CheatSheetData {
@@ -61,6 +64,7 @@ interface AICheatSheetGeneratorModalProps {
   initialTopic?: string;
   onStartSprintForTopic?: (subjectName: string, chapterName: string, topicName: string) => void;
   onSaveToVault?: (title: string, content: string, subjectName: string) => void;
+  onExportToFlashcards?: (deck: FlashcardDeck) => void;
 }
 
 export const AICheatSheetGeneratorModal: React.FC<AICheatSheetGeneratorModalProps> = ({
@@ -70,7 +74,8 @@ export const AICheatSheetGeneratorModal: React.FC<AICheatSheetGeneratorModalProp
   initialSubject,
   initialTopic,
   onStartSprintForTopic,
-  onSaveToVault
+  onSaveToVault,
+  onExportToFlashcards
 }) => {
   const [selectedSubjectName, setSelectedSubjectName] = useState<string>(initialSubject || subjects[0]?.name || '');
   const [selectedTopicName, setSelectedTopicName] = useState<string>(initialTopic || '');
@@ -78,7 +83,10 @@ export const AICheatSheetGeneratorModal: React.FC<AICheatSheetGeneratorModalProp
   const [error, setError] = useState<string | null>(null);
   const [cheatSheet, setCheatSheet] = useState<CheatSheetData | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
+  const [copiedPrompt, setCopiedPrompt] = useState<boolean>(false);
   const [savedToVaultStatus, setSavedToVaultStatus] = useState<boolean>(false);
+  const [exportedToFlashcards, setExportedToFlashcards] = useState<boolean>(false);
+  const [showPromptModal, setShowPromptModal] = useState<boolean>(false);
 
   const activeSubject = subjects.find(s => s.name === selectedSubjectName) || subjects[0];
   const allTopicsInSubject = activeSubject?.chapters.flatMap(ch => ch.topics.map(t => ({ ...t, chapterName: ch.name }))) || [];
@@ -164,12 +172,111 @@ ${cheatSheet.quickRevisionChecklist.map(c => `- [ ] ${c}`).join('\n')}
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const getVisualImagePrompt = (): string => {
+    if (!cheatSheet) return '';
+    const formulaHighlights = cheatSheet.keyFormulasAndDefinitions.slice(0, 3).map(f => `${f.term}: ${f.formulaOrDef}`).join(' | ');
+    const trapHighlights = cheatSheet.examinerTrapsAndPitfalls.slice(0, 2).map(t => t.trap).join('; ');
+    const mnemonicHighlight = cheatSheet.mnemonicsAndMemoryAnchors[0]?.mnemonic || '';
+
+    return `High-density educational study infographic poster about "${cheatSheet.topic}" (${cheatSheet.subject}). Swiss graphic design aesthetic, clean modern typography, organized multi-column grid layout on textured cream paper background (#F9F7F2) with dark forest green (#2D312E) and sage accents. 
+Header: Bold geometric title "${cheatSheet.topic.toUpperCase()} - REVISION POSTER". 
+Top Section: Key formulas callout box (${formulaHighlights}). 
+Center: High-detail anatomical/scientific schematic diagram illustrating the primary mechanism of ${cheatSheet.topic}, with crisp labeled arrows, vector rays, and callout nodes. 
+Right Column: High-contrast red/emerald warning banner "EXAMINER TRAPS TO AVOID" (${trapHighlights}). 
+Bottom Banner: Memory anchor mnemonic badge "${mnemonicHighlight}". 
+Crisp vector linework, sharp 4K vector illustration, zero blurry artifacts, photorealistic educational blueprint poster, museum-grade layout quality, award-winning academic infographic.`;
+  };
+
+  const handleCopyVisualPrompt = () => {
+    const prompt = getVisualImagePrompt();
+    if (!prompt) return;
+    navigator.clipboard.writeText(prompt);
+    setCopiedPrompt(true);
+    setTimeout(() => setCopiedPrompt(false), 2500);
+  };
+
   const handleSaveVault = () => {
     if (!cheatSheet || !onSaveToVault) return;
     const content = JSON.stringify(cheatSheet, null, 2);
     onSaveToVault(`Cheat Sheet: ${cheatSheet.topic}`, content, cheatSheet.subject);
     setSavedToVaultStatus(true);
     setTimeout(() => setSavedToVaultStatus(false), 3000);
+  };
+
+  const handleExportFlashcards = () => {
+    if (!cheatSheet || !onExportToFlashcards) return;
+
+    // Convert formulas, examiner traps, and high-yield questions into flashcards
+    const cards: Flashcard[] = [];
+
+    // Formulas & Definitions
+    cheatSheet.keyFormulasAndDefinitions.forEach((item, idx) => {
+      cards.push({
+        id: `card-formula-${Date.now()}-${idx}`,
+        front: `[Formula & Concept] What is the definition / formula for: ${item.term}?`,
+        back: `${item.formulaOrDef}${item.unitsOrVariables ? `\nUnits/Variables: ${item.unitsOrVariables}` : ''}${item.notes ? `\n\nTakeaway: ${item.notes}` : ''}`,
+        tags: [cheatSheet.subject, cheatSheet.topic, 'Formula', 'Active Recall'],
+        easeFactor: 2.5,
+        intervalDays: 1,
+        repetitions: 0
+      });
+    });
+
+    // Examiner Traps & Pitfalls
+    cheatSheet.examinerTrapsAndPitfalls.forEach((trap, idx) => {
+      cards.push({
+        id: `card-trap-${Date.now()}-${idx}`,
+        front: `[Examiner Trap Alert] Common blunder in ${cheatSheet.topic}:\n"${trap.trap}" — What is the correct board approach?`,
+        back: `Correct Approach:\n${trap.correctApproach}\n\nExaminer Insight:\n${trap.explanation}`,
+        tags: [cheatSheet.subject, cheatSheet.topic, 'Examiner Trap'],
+        easeFactor: 2.5,
+        intervalDays: 1,
+        repetitions: 0
+      });
+    });
+
+    // Mnemonics
+    cheatSheet.mnemonicsAndMemoryAnchors.forEach((m, idx) => {
+      cards.push({
+        id: `card-mnem-${Date.now()}-${idx}`,
+        front: `[Mnemonic Anchor] What is the mnemonic memory trick for: ${m.concept}?`,
+        back: `Mnemonic: "${m.mnemonic}"\n\nExplanation: ${m.explanation}`,
+        mnemonic: m.mnemonic,
+        tags: [cheatSheet.subject, cheatSheet.topic, 'Mnemonic'],
+        easeFactor: 2.5,
+        intervalDays: 1,
+        repetitions: 0
+      });
+    });
+
+    // High Yield Questions
+    cheatSheet.highYieldExamQuestions.forEach((q, idx) => {
+      cards.push({
+        id: `card-hyq-${Date.now()}-${idx}`,
+        front: `[High-Yield ${q.frequency} Priority • ${q.marks} Marks]\n${q.question}`,
+        back: `Model Answer / Key:\n${q.answerKey}`,
+        tags: [cheatSheet.subject, cheatSheet.topic, 'Exam Question'],
+        easeFactor: 2.5,
+        intervalDays: 1,
+        repetitions: 0
+      });
+    });
+
+    const newDeck: FlashcardDeck = {
+      id: `deck-cheatsheet-${Date.now()}`,
+      title: `${cheatSheet.topic} (Cheat Sheet Recall)`,
+      subjectName: cheatSheet.subject,
+      chapterName: cheatSheet.chapter,
+      topicName: cheatSheet.topic,
+      description: `High-yield formula & trap cards generated from 1-page cheat sheet for ${cheatSheet.topic}.`,
+      cards,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    onExportToFlashcards(newDeck);
+    setExportedToFlashcards(true);
+    setTimeout(() => setExportedToFlashcards(false), 3000);
   };
 
   if (!isOpen) return null;
@@ -254,6 +361,15 @@ ${cheatSheet.quickRevisionChecklist.map(c => `- [ ] ${c}`).join('\n')}
           {cheatSheet && (
             <div className="flex items-center gap-1.5">
               <button
+                onClick={() => setShowPromptModal(!showPromptModal)}
+                className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 border border-amber-300 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Generate Midjourney / DALL-E / Ideogram visual poster prompt"
+              >
+                <Palette className="w-3.5 h-3.5 text-amber-600" />
+                <span>Visual AI Prompt</span>
+              </button>
+
+              <button
                 onClick={handlePrint}
                 className="px-3 py-1.5 bg-white border border-[#E0DBD0] hover:bg-[#F2EFE9] text-[#4A4E4D] rounded-xl text-xs font-medium transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
                 title="Print or Save as PDF"
@@ -279,6 +395,17 @@ ${cheatSheet.quickRevisionChecklist.map(c => `- [ ] ${c}`).join('\n')}
                 >
                   <FolderPlus className="w-3.5 h-3.5 text-[#6B705C]" />
                   <span>{savedToVaultStatus ? 'Saved!' : 'Vault'}</span>
+                </button>
+              )}
+
+              {onExportToFlashcards && (
+                <button
+                  onClick={handleExportFlashcards}
+                  className="px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-900 border border-indigo-300 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Push formulas, traps, and mnemonics directly into a new Flashcards deck"
+                >
+                  <Brain className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>{exportedToFlashcards ? 'Deck Created!' : 'Push to Flashcards'}</span>
                 </button>
               )}
             </div>
@@ -338,6 +465,44 @@ ${cheatSheet.quickRevisionChecklist.map(c => `- [ ] ${c}`).join('\n')}
           {!loading && cheatSheet && (
             <div id="cheat-sheet-printable" className="space-y-6 print:space-y-4">
               
+              {/* VISUAL INFOGRAPHIC AI IMAGE PROMPTER PANEL */}
+              {showPromptModal && (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-300 space-y-3 print:hidden animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-xl bg-amber-500/20 text-amber-700 flex items-center justify-center font-bold">
+                        <ImageIcon className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-amber-950">Visual Infographic Poster Prompt</h3>
+                        <p className="text-[10px] text-amber-800">Copy this tuned prompt into Midjourney, DALL-E 3, Ideogram, or Imagen to generate a visual infographic poster.</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowPromptModal(false)}
+                      className="p-1 rounded-lg hover:bg-amber-500/20 text-amber-800 transition cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-white border border-amber-200 font-mono text-[11px] text-[#2D312E] leading-relaxed max-h-40 overflow-y-auto selection:bg-amber-200">
+                    {getVisualImagePrompt()}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10px] text-muted">Aesthetic: Swiss Minimalist Academic Poster • 4K Blueprint Diagram</span>
+                    <button
+                      onClick={handleCopyVisualPrompt}
+                      className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95"
+                    >
+                      {copiedPrompt ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedPrompt ? 'Prompt Copied!' : 'Copy Image Prompt'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* DOCUMENT HEADER / MASTHEAD */}
               <div className="p-5 rounded-2xl bg-gradient-to-r from-[#2D312E] to-[#1A1C1B] text-white border border-[#2D312E] space-y-2 print:bg-white print:text-black print:border-b-2 print:border-black print:rounded-none print:p-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">

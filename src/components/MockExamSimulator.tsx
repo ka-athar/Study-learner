@@ -55,6 +55,8 @@ import {
 } from '../types';
 import { apiGenerateMockExam, apiGradeMockExam } from '../lib/aiApi';
 import { getOrRequestGmailToken, sendTestImprovementEmail } from '../lib/gmailService';
+import { addMistake } from '../lib/mistakeVaultStorage';
+import { recordMockTopicScore } from '../lib/retentionGraphStorage';
 
 interface MockExamSimulatorProps {
   subjects: Subject[];
@@ -432,6 +434,28 @@ export const MockExamSimulator: React.FC<MockExamSimulatorProps> = ({
       .filter(q => q.remedyTutorPrompt)
       .map(q => q.remedyTutorPrompt as string);
 
+    // Full question-level persistence
+    const savedQuestionsPayload = graded.gradedQuestions.map(q => {
+      const orig = currentExam?.questions.find(o => o.id === q.questionId || o.questionNumber === q.questionNumber);
+      return {
+        questionId: q.questionId,
+        questionNumber: q.questionNumber,
+        questionText: orig?.questionText || `Question ${q.questionNumber}`,
+        studentAnswer: studentAnswers[q.questionId] || q.studentAnswer || '',
+        modelAnswer: q.modelAnswer || orig?.modelAnswer || '',
+        awardedMarks: q.awardedMarks,
+        totalMarks: q.totalMarks,
+        isCorrect: q.isCorrect,
+        feedback: q.feedback,
+        topicName: q.topicName || orig?.topicName,
+        rubricBreakdown: q.rubricEvaluations?.map(r => ({
+          criterion: r.criterion,
+          marks: r.allocatedMarks,
+          awarded: r.awardedMarks
+        }))
+      };
+    });
+
     const testRecord: Omit<TestResult, 'id'> = {
       userId: userProfile?.id || 'default-user',
       testName: graded.title || `${graded.subjectName} Timed Mock Exam`,
@@ -449,8 +473,35 @@ export const MockExamSimulator: React.FC<MockExamSimulatorProps> = ({
       isCorrected: false,
       questionsCount: graded.gradedQuestions.length,
       correctCount: graded.gradedQuestions.filter(q => q.isCorrect).length,
-      incorrectCount: graded.gradedQuestions.filter(q => !q.isCorrect).length
+      incorrectCount: graded.gradedQuestions.filter(q => !q.isCorrect).length,
+      savedQuestionsData: savedQuestionsPayload
     };
+
+    // Automatically match & store mock exam errors into the Unified Mistake Vault
+    graded.gradedQuestions.forEach(q => {
+      if (!q.isCorrect || (q.awardedMarks / q.totalMarks) < 0.75) {
+        const originalQ = currentExam?.questions.find(orig => orig.id === q.questionId || orig.questionNumber === q.questionNumber);
+        const qPrompt = originalQ?.questionText || `Mock Exam Question ${q.questionNumber}`;
+        const solutionText = q.modelAnswer || originalQ?.modelAnswer || q.rubricEvaluations?.map(r => r.criterion).join('; ') || 'Follow board rubric guidelines.';
+
+        addMistake({
+          subjectName: graded.subjectName,
+          topicName: q.topicName || originalQ?.topicName || 'Mock Exam Topic',
+          question: `[Mock Exam Q${q.questionNumber}]: ${qPrompt}`,
+          userAttempt: studentAnswers[q.questionId] || q.studentAnswer || '(No answer provided)',
+          correctAnswer: solutionText,
+          errorCategory: (q.awardedMarks / q.totalMarks) < 0.4 ? 'concept_gap' : 'careless_calc',
+          notes: `Mock Exam Lost Marks (-${q.totalMarks - q.awardedMarks} marks): ${q.feedback}`,
+          source: 'mock_exam'
+        });
+
+        // Record topic retention decay in Cognitive Health Graph
+        const matchedTopic = q.topicName || originalQ?.topicName;
+        if (matchedTopic) {
+          recordMockTopicScore(graded.subjectName, matchedTopic, Math.round((q.awardedMarks / q.totalMarks) * 100));
+        }
+      }
+    });
 
     onAddTestResult(testRecord);
     setSavedToVaultStatus(true);

@@ -279,6 +279,40 @@ export const PreparationTimelineModal: React.FC<PreparationTimelineModalProps> =
               <span>Reset Template</span>
             </button>
 
+            <button
+              onClick={() => {
+                // Ensure Phase 3 exists or add it directly
+                const hasPhase3 = stages.some(s => s.title.toLowerCase().includes('phase 3') || (s.phase === 'review' && s.daysBeforeTarget === 1));
+                if (!hasPhase3) {
+                  const targetD = new Date(targetItem.dueDate);
+                  const p3Date = new Date(targetD.getTime() - 86400000).toISOString().split('T')[0];
+                  const phase3Stage: PrepTimelineStage = {
+                    id: 'stage-p3-' + Date.now(),
+                    title: `Phase 3: Deep Verification, Mistake Audit & Formula Polish`,
+                    description: `Critical 24-hour review before test/submission: verify formulas, audit mistake vault hotspots, and solve high-yield past questions.`,
+                    phase: 'review',
+                    scheduledDate: p3Date,
+                    timeslot: 'evening',
+                    estimatedMinutes: 45,
+                    completed: false,
+                    daysBeforeTarget: 1,
+                    workloadContext: {
+                      dayLevel: 'Moderate',
+                      totalMinutesOnDay: 45,
+                      taskCountOnDay: 1,
+                      note: 'High-yield final verification stage'
+                    }
+                  };
+                  setStages([...stages, phase3Stage]);
+                }
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-500/15 text-purple-700 dark:text-purple-300 border border-purple-500/30 hover:bg-purple-500/25 text-xs font-bold transition cursor-pointer"
+              title="Initiate Phase 3 milestone (Final Polish & Formula Verification)"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+              <span>Initiate Phase 3</span>
+            </button>
+
             {onSavePlan && (
               <button
                 onClick={handleSyncToPlans}

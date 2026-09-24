@@ -77,6 +77,7 @@ import { YearProfileCard } from './YearProfileCard';
 import { EditYearProfileModal } from './EditYearProfileModal';
 import { FeynmanConceptAnalyzer } from './FeynmanConceptAnalyzer';
 import { ExamReadinessIndexCard } from './ExamReadinessIndexCard';
+import { SpacedRepetitionCadenceBanner } from './SpacedRepetitionCadenceBanner';
 import { StudyHabitHeatmapCard } from './StudyHabitHeatmapCard';
 import { RetentionForgettingCurveCard } from './RetentionForgettingCurveCard';
 import { triggerStudyGoalConfetti } from '../lib/confetti';
@@ -1119,6 +1120,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 1-3-7 DAY SPACED REPETITION CADENCE BANNER (STRICTLY ABOVE EXAM READINESS INDEX) */}
+      <SpacedRepetitionCadenceBanner
+        subjects={subjects}
+        revisions={revisions}
+        sessions={sessions}
+        userProfile={userProfile}
+        onStartSprintForTopic={(subj, _ch, top) => {
+          if (onOpenZenSprint) onOpenZenSprint(subj, top);
+          else onStartTimerForTopic(subj, _ch, top);
+        }}
+        onOpenCheatSheetForTopic={(subj, top) => {
+          if (onOpenCheatSheet) onOpenCheatSheet(subj, top);
+        }}
+      />
 
       {/* OPTION 3: EXAM READINESS INDEX CARD */}
       <ExamReadinessIndexCard

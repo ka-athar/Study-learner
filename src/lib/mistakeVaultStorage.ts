@@ -283,6 +283,10 @@ export function deleteMistake(id: string): void {
   saveMistakes(mistakes.filter(m => m.id !== id));
 }
 
+// Aliases for compatibility
+export const getStoredMistakes = loadMistakes;
+export const recordPracticeAttempt = recordMistakeAttempt;
+
 export function subscribeMistakes(callback: (mistakes: MistakeEntry[]) => void): () => void {
   const handler = (e: any) => {
     if (e.detail) {

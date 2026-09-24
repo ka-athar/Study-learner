@@ -219,6 +219,14 @@ export interface StudyPlanTopic {
   completionDetails?: string;
   completionStatus?: TopicCompletionStatus;
   completedAt?: string;
+  targetedQuestions?: Array<{
+    id: string;
+    questionText: string;
+    type?: 'mcq' | 'conceptual' | 'numerical';
+    marks?: number;
+    expectedKey?: string;
+  }>;
+  linkedMistakeIds?: string[];
 }
 
 export interface StudyPlan {
@@ -345,6 +353,19 @@ export interface TestResult {
   correctCount?: number;
   incorrectCount?: number;
   analysis?: TestResultAnalysis;
+  savedQuestionsData?: Array<{
+    questionId: string;
+    questionNumber: number;
+    questionText: string;
+    studentAnswer?: string;
+    modelAnswer?: string;
+    awardedMarks: number;
+    totalMarks: number;
+    isCorrect: boolean;
+    feedback?: string;
+    topicName?: string;
+    rubricBreakdown?: Array<{ criterion: string; marks: number; awarded: number }>;
+  }>;
   classroomPostId?: string;
   classroomCourseId?: string;
   classroomCourseName?: string;
@@ -434,13 +455,18 @@ export interface BlurtRecallEvaluation {
   retentionLevel: 'Mastered' | 'Strong' | 'Needs Revision' | 'Weak';
   wordCount: number;
   summaryFeedback: string;
-  recalledConcepts: BlurtRecalledConcept[];
+  recalledConcepts: (BlurtRecalledConcept | string)[];
   knowledgeGaps: BlurtKnowledgeGap[];
   misconceptions: BlurtMisconception[];
   actionableAdvice: string[];
   imageUrl?: string;
   extractedText?: string;
   diagramNotes?: string;
+  // Deep Diagnostic & Explanation Autopsy:
+  whyUnableToExplain?: string; // Root cause why the student struggled to explain to the fullest (e.g. superficial memorization without derivation, vague terminology, missing causal links)
+  backlashesAndPitfalls?: string[]; // Academic backlash / examiner deductions if attempted in official FBISE board exams
+  keyConceptsMissed?: string[]; // Essential definitions, equations, or laws that were missing
+  recommendedRemediation?: string; // Direct concrete next study step to fix this topic
 }
 
 export interface ActivityLog {
@@ -1092,7 +1118,7 @@ export interface MistakeEntry {
   notes?: string;
   imageAttachment?: string; // Data URL or base64 of question/working photo
   pdfAttachment?: string;   // PDF link or filename
-  source: 'quiz' | 'red_pen' | 'past_paper' | 'offline_exam' | 'manual' | 'refurbish_mode' | 'auto_forcing_paper' | 'google_forms_mcq';
+  source: 'quiz' | 'red_pen' | 'past_paper' | 'offline_exam' | 'manual' | 'refurbish_mode' | 'auto_forcing_paper' | 'google_forms_mcq' | 'mock_exam' | 'blurt' | 'socratic' | 'timer';
   cureStatus: 'active' | 'curing' | 'cured';
   consecutiveCorrect: number; // Reaches 3 to cure
   history: Array<{
@@ -1138,6 +1164,12 @@ export interface RedPenResult {
   modelAnswer: string;
   examinerTip: string;
   assessedAt: string;
+  // Deep Autopsy & Diagnostic:
+  whyUnableToExplain?: string;
+  missingEssentials?: string[];
+  examBacklashes?: string[];
+  uploadedImageUrl?: string;
+  visionAnalysis?: MultimodalVisionAnalysis;
 }
 
 // -------------------------------------------------------------
@@ -1314,6 +1346,88 @@ export interface AutoForcingPaperSession {
     calibratedCount: number;
   };
 }
+
+// -------------------------------------------------------------
+// OPTION 4: TARGETED 2-MINUTE DRILL RE-ATTEMPT
+// -------------------------------------------------------------
+
+export interface DrillQuestion {
+  id: string;
+  targetedConcept: string; // The specific missing essential or misconception this question tests
+  questionText: string;
+  hint: string;
+  expectedKeyTerms: string[];
+  idealAnswer: string;
+  marks: number;
+  userResponse?: string;
+  isEvaluated?: boolean;
+  scoreAwarded?: number;
+  feedback?: string;
+  isMastered?: boolean;
+}
+
+export interface RemediationDrill {
+  id: string;
+  subjectName: string;
+  topicName: string;
+  sourceContext: string; // e.g. "Blurt Recall Gaps" or "Examiner Red Pen Deductions"
+  diagnosedRootCause: string;
+  targetedMissingConcepts: string[];
+  questions: DrillQuestion[];
+  generatedAt: string;
+  totalMarks: number;
+  scoreAchieved?: number;
+  isCompleted?: boolean;
+}
+
+// -------------------------------------------------------------
+// VISUAL RED PEN DIAGRAM & HANDWRITING ANNOTATIONS (MULTIMODAL)
+// -------------------------------------------------------------
+
+export interface VisualAnnotationMark {
+  id: string;
+  xPercent: number; // 0-100% position on image
+  yPercent: number; // 0-100% position on image
+  type: 'deduction' | 'slip' | 'missing_arrow' | 'unit_error' | 'correct_tick';
+  label: string;
+  comment: string;
+  marksDelta?: number; // e.g. -0.5, -1, +1
+}
+
+export interface MultimodalVisionAnalysis {
+  transcribedText: string;
+  diagramAssessment: {
+    hasDiagram: boolean;
+    diagramAccuracyScore: number; // 0-100
+    missingLabelsOrArrows: string[];
+    geometricOrVectorIssues: string[];
+  };
+  handwritingClarity: 'Clear' | 'Borderline' | 'Difficult to Read';
+  annotations: VisualAnnotationMark[];
+}
+
+// -------------------------------------------------------------
+// COGNITIVE HEALTH & EBBINGHAUS FORGETTING CURVE GRAPH
+// -------------------------------------------------------------
+
+export interface CognitiveTopicHealth {
+  topicKey: string; // "Physics::Electrostatics"
+  subjectName: string;
+  chapterName?: string;
+  topicName: string;
+  retentionPercent: number; // 0-100% calculated via Ebbinghaus decay
+  stabilityDays: number; // S parameter
+  lastReviewedDate: string;
+  daysSinceReview: number;
+  riskLevel: 'safe' | 'decaying' | 'critical_decay';
+  totalLoggedMistakes: number;
+  lastBlurtScore?: number;
+  lastMockScore?: number;
+  consecutiveRecallPasses: number;
+  nextRecommendedReviewDate: string;
+  missedEssentialsCount: number;
+}
+
 
 
 

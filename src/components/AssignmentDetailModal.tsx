@@ -703,22 +703,54 @@ export const AssignmentDetailModal: React.FC<AssignmentDetailModalProps> = ({
                   type="button"
                   onClick={handleGenerateStudyPlan}
                   className="px-3 py-1.5 rounded-xl bg-primary text-white text-xs font-bold flex items-center gap-1.5 hover:bg-primary/90 transition shadow-xs cursor-pointer"
+                  title="Generate multi-phase study & practice plan leading to target date"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Auto Plan</span>
+                  <span>Initiate Study Plan</span>
                 </button>
               )}
 
               {subtasks.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleReschedulePrepTasks}
-                  className="px-2.5 py-1.5 rounded-xl bg-theme-accent border border-theme text-primary text-[11px] font-bold flex items-center gap-1 hover:bg-theme-accent/80 transition cursor-pointer"
-                  title="Reschedule unfinished tasks forward from today"
-                >
-                  <RotateCcw className="w-3 h-3 text-primary" />
-                  <span>Reschedule</span>
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Jump or add Phase 3 stage directly if not already present
+                      const hasPhase3 = subtasks.some(s => s.title.toLowerCase().includes('phase 3') || s.phase === 'review');
+                      if (!hasPhase3) {
+                        const phase3Task = {
+                          id: 'subtask-' + Date.now(),
+                          title: `Phase 3: Deep Verification, Mistake Audit & Formula Polish`,
+                          completed: false,
+                          phase: 'review' as const,
+                          scheduledDate: new Date(Date.now() + 86400000).toISOString().split('T')[0]
+                        };
+                        const updated = {
+                          ...formData,
+                          subtasks: [...subtasks, phase3Task],
+                          updatedAt: new Date().toISOString()
+                        };
+                        setFormData(updated);
+                        handleSaveInPlace(updated);
+                      }
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-700 dark:text-purple-300 text-[11px] font-bold flex items-center gap-1 hover:bg-purple-500/25 transition cursor-pointer"
+                    title="Ensure Phase 3 (Verification & Final Polish) is active"
+                  >
+                    <Check className="w-3 h-3 text-purple-600 dark:text-purple-400" />
+                    <span>Initiate Phase 3</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleReschedulePrepTasks}
+                    className="px-2.5 py-1.5 rounded-xl bg-theme-accent border border-theme text-primary text-[11px] font-bold flex items-center gap-1 hover:bg-theme-accent/80 transition cursor-pointer"
+                    title="Reschedule unfinished tasks forward from today"
+                  >
+                    <RotateCcw className="w-3 h-3 text-primary" />
+                    <span>Reschedule</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>

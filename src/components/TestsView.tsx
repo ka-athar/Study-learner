@@ -28,7 +28,8 @@ import {
   Upload,
   Clock,
   Share2,
-  RefreshCw
+  RefreshCw,
+  ChevronDown
 } from 'lucide-react';
 import { TestResult, Subject, ActiveTab, UserProfile, StudyPlan, StudySession, ScheduledStudyTask, ExamDate, StorageVault } from '../types';
 import { apiAnalyzeMistakes } from '../lib/aiApi';
@@ -113,6 +114,7 @@ export const TestsView: React.FC<TestsViewProps> = ({
   // Email Diagnostic Report Modal State
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [focusEmailTestId, setFocusEmailTestId] = useState<string | undefined>(undefined);
+  const [expandedQuestionsTestId, setExpandedQuestionsTestId] = useState<string | null>(null);
 
   // Smart Schedule Adjuster Modal State
   const [isScheduleAdjusterOpen, setIsScheduleAdjusterOpen] = useState(false);
@@ -984,6 +986,79 @@ export const TestsView: React.FC<TestsViewProps> = ({
                           <span>Student Correction & Learning Notes:</span>
                         </span>
                         <p className="text-[#4A4E4D] leading-relaxed">{test.correctionNotes}</p>
+                      </div>
+                    )}
+
+                    {/* PERSISTENT QUESTION-LEVEL BREAKDOWN ACCORDION */}
+                    {test.savedQuestionsData && test.savedQuestionsData.length > 0 && (
+                      <div className="pt-2 border-t border-[#E0DBD0]/80">
+                        <button
+                          onClick={() => setExpandedQuestionsTestId(expandedQuestionsTestId === test.id ? null : test.id)}
+                          className="w-full flex items-center justify-between p-3 rounded-2xl bg-[#F9F7F2] hover:bg-[#F2EFE9] border border-[#E0DBD0] text-xs font-bold text-[#4A4E4D] transition cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileCheck className="w-4 h-4 text-[#6B705C]" />
+                            <span>Saved Question-Level Breakdown ({test.savedQuestionsData.length} Questions Saved)</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[11px] text-[#8A8F80]">
+                            <span>{expandedQuestionsTestId === test.id ? 'Hide Questions' : 'Inspect Saved Questions & Answers'}</span>
+                            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${expandedQuestionsTestId === test.id ? 'rotate-180' : ''}`} />
+                          </div>
+                        </button>
+
+                        {expandedQuestionsTestId === test.id && (
+                          <div className="mt-3 space-y-3 pl-2 sm:pl-3 border-l-2 border-[#6B705C]/30 animate-in fade-in duration-200">
+                            {test.savedQuestionsData.map((qItem, qIdx) => (
+                              <div
+                                key={qItem.questionId || qIdx}
+                                className={`p-3.5 rounded-2xl border text-xs space-y-2.5 transition ${
+                                  qItem.isCorrect
+                                    ? 'bg-emerald-500/5 border-emerald-500/25'
+                                    : 'bg-rose-500/5 border-rose-500/25'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex items-center gap-2 font-bold text-[#2D312E]">
+                                    <span className="font-mono text-[#6B705C]">Q{qItem.questionNumber || qIdx + 1}.</span>
+                                    <span>{qItem.questionText}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      qItem.isCorrect
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-rose-100 text-rose-800'
+                                    }`}>
+                                      {qItem.isCorrect ? 'Correct' : 'Needs Review'}
+                                    </span>
+                                    <span className="font-mono font-bold text-[10px] text-[#4A4E4D] bg-white px-2 py-0.5 rounded-md border border-[#E0DBD0]">
+                                      {qItem.awardedMarks} / {qItem.totalMarks} M
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {qItem.studentAnswer && (
+                                  <div className="p-2.5 rounded-xl bg-white/80 border border-[#E0DBD0] space-y-1">
+                                    <span className="text-[10px] font-bold text-[#8A8F80] uppercase tracking-wider block">Your Saved Answer:</span>
+                                    <p className="text-[11px] text-[#2D312E] whitespace-pre-wrap">{qItem.studentAnswer}</p>
+                                  </div>
+                                )}
+
+                                {qItem.modelAnswer && (
+                                  <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 space-y-1">
+                                    <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Examiner Model Solution:</span>
+                                    <p className="text-[11px] text-emerald-950 whitespace-pre-wrap">{qItem.modelAnswer}</p>
+                                  </div>
+                                )}
+
+                                {qItem.feedback && (
+                                  <p className="text-[10.5px] text-[#6B705C] italic">
+                                    Examiner Note: {qItem.feedback}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

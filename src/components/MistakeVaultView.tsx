@@ -23,9 +23,11 @@ import {
   Award,
   Zap,
   Tag,
-  PenTool
+  PenTool,
+  FileCheck
 } from 'lucide-react';
-import { MistakeEntry, CognitiveErrorCategory, Subject } from '../types';
+import { MistakeEntry, CognitiveErrorCategory, Subject, TestResult } from '../types';
+import { RetestMistakesModal } from './RetestMistakesModal';
 import { 
   loadMistakes, 
   saveMistakes, 
@@ -40,13 +42,21 @@ import {
 interface MistakeVaultViewProps {
   subjects: Subject[];
   onNavigateToRedPen?: () => void;
+  onOpenRetentionGraph?: () => void;
+  onOpenMorningWarmup?: () => void;
+  onStartDrill?: (mistakeId?: string, subjectName?: string, topicName?: string) => void;
   onAwardXP?: (xp: number, reason: string) => void;
+  onSaveTestResult?: (test: Omit<TestResult, 'id'>) => void;
 }
 
 export const MistakeVaultView: React.FC<MistakeVaultViewProps> = ({
   subjects,
   onNavigateToRedPen,
-  onAwardXP
+  onOpenRetentionGraph,
+  onOpenMorningWarmup,
+  onStartDrill,
+  onAwardXP,
+  onSaveTestResult
 }) => {
   const [mistakes, setMistakes] = useState<MistakeEntry[]>(() => loadMistakes());
   const [selectedSubject, setSelectedSubject] = useState<string>('all');
@@ -60,6 +70,7 @@ export const MistakeVaultView: React.FC<MistakeVaultViewProps> = ({
   const [showWorkoutAnswer, setShowWorkoutAnswer] = useState(false);
   const [workoutFinished, setWorkoutFinished] = useState(false);
   const [expandedMistakeIds, setExpandedMistakeIds] = useState<Record<string, boolean>>({});
+  const [isRetestModalOpen, setIsRetestModalOpen] = useState(false);
 
   // New Mistake Form State
   const [formSubject, setFormSubject] = useState(subjects[0]?.name || 'Physics');
@@ -177,7 +188,29 @@ export const MistakeVaultView: React.FC<MistakeVaultViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+          {onOpenRetentionGraph && (
+            <button
+              onClick={onOpenRetentionGraph}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition shadow-2xs cursor-pointer"
+              title="View Ebbinghaus memory stability & forgetting curvature across all topics"
+            >
+              <TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>Cognitive Graph</span>
+            </button>
+          )}
+
+          {onOpenMorningWarmup && (
+            <button
+              onClick={onOpenMorningWarmup}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/30 text-xs font-semibold transition shadow-2xs cursor-pointer"
+              title="Launch daily 3-question spaced mistake review workout"
+            >
+              <Zap className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+              <span>Morning Warmup</span>
+            </button>
+          )}
+
           {onNavigateToRedPen && (
             <button
               onClick={onNavigateToRedPen}
@@ -187,6 +220,15 @@ export const MistakeVaultView: React.FC<MistakeVaultViewProps> = ({
               <span>Red Pen Grader</span>
             </button>
           )}
+
+          <button
+            onClick={() => setIsRetestModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30 text-xs font-bold transition shadow-2xs cursor-pointer"
+            title="Generate a custom timed re-test quiz from your active uncured mistakes"
+          >
+            <FileCheck className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            <span>Re-Test Uncured Traps</span>
+          </button>
 
           <button
             onClick={() => setIsAddModalOpen(true)}
@@ -438,8 +480,29 @@ export const MistakeVaultView: React.FC<MistakeVaultViewProps> = ({
 
               {/* Card Footer Actions */}
               <div className="mt-3 pt-2 border-t border-theme/40 flex items-center justify-between text-xs text-muted">
-                <span>Logged from: {m.source}</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-muted">Source:</span>
+                  <span className="px-2 py-0.5 rounded-md bg-surface-raised border border-theme text-[10px] font-bold text-primary capitalize flex items-center gap-1">
+                    {m.source === 'red_pen' ? '🖊️ Examiner Red Pen' :
+                     m.source === 'past_paper' ? '📝 Mock Exam Paper' :
+                     m.source === 'quiz' ? '⚡ Active Quiz' :
+                     m.source === 'blurt' ? '🧠 Blurt Active Retrieval' :
+                     m.source === 'socratic' ? '🎙️ Socratic Oral' :
+                     m.source === 'timer' ? '⏱️ Study Sprint Autopsy' :
+                     '📌 ' + (m.source || 'Manual')}
+                  </span>
+                </div>
                 <div className="flex items-center gap-2">
+                  {onStartDrill && (
+                    <button
+                      onClick={() => onStartDrill(m.id, m.subjectName, m.topicName)}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-semibold transition cursor-pointer text-[11px]"
+                      title="Launch targeted 2-minute remediation drill for this specific concept"
+                    >
+                      <Zap className="w-3 h-3 text-amber-500" />
+                      <span>2-Min Drill</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       const { justCured } = recordMistakeAttempt(m.id, true);
@@ -720,6 +783,18 @@ export const MistakeVaultView: React.FC<MistakeVaultViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Retest Mistakes Modal */}
+      <RetestMistakesModal
+        isOpen={isRetestModalOpen}
+        onClose={() => setIsRetestModalOpen(false)}
+        mistakes={mistakes}
+        subjects={subjects}
+        onSaveTestResult={onSaveTestResult}
+        onCureMistakeSuccess={(mistakeId) => {
+          recordMistakeAttempt(mistakeId, true);
+        }}
+      />
     </div>
   );
 };

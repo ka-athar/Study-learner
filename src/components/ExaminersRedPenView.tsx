@@ -30,7 +30,10 @@ import {
   Layers,
   Flame,
   CheckCheck,
-  X
+  X,
+  Camera,
+  Upload,
+  Image as ImageIcon
 } from 'lucide-react';
 import { 
   Subject, 
@@ -44,12 +47,14 @@ import {
 } from '../types';
 import { addMistake } from '../lib/mistakeVaultStorage';
 import { DEFAULT_BLUNDER_CHALLENGES } from '../data/spotBlunderBank';
+import { TargetedRemediationDrillModal } from './TargetedRemediationDrillModal';
 
 interface ExaminersRedPenViewProps {
   subjects: Subject[];
   initialSubjectName?: string;
   initialTopicName?: string;
   onNavigateToMistakeVault?: () => void;
+  onNavigateToTests?: () => void;
   onAwardXP?: (xp: number, reason: string) => void;
 }
 
@@ -76,6 +81,7 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
   initialSubjectName,
   initialTopicName,
   onNavigateToMistakeVault,
+  onNavigateToTests,
   onAwardXP
 }) => {
   // Top primary navigation: Spot the Blunder Game vs Grade My Answer
@@ -104,6 +110,9 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
 
   // Vault saved trackers
   const [addedTrapsToVault, setAddedTrapsToVault] = useState<Record<string, boolean>>({});
+  const [selectedVisualAnnoId, setSelectedVisualAnnoId] = useState<string | null>(null);
+  const [showSvgAnnotations, setShowSvgAnnotations] = useState<boolean>(true);
+  const [activeAnnoFilter, setActiveAnnoFilter] = useState<'all' | 'deduction' | 'slip' | 'correct_tick'>('all');
 
   // Examiner Performance Tracking
   const [examinerScoreCard, setExaminerScoreCard] = useState<{
@@ -283,7 +292,10 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
   const [isGrading, setIsGrading] = useState(false);
   const [evaluationResult, setEvaluationResult] = useState<RedPenResult | null>(null);
   const [addedDeductions, setAddedDeductions] = useState<Record<string, boolean>>({});
-  const [myAnswerActiveTab, setMyAnswerActiveTab] = useState<'marking' | 'model_answer'>('marking');
+  const [myAnswerActiveTab, setMyAnswerActiveTab] = useState<'marking' | 'model_answer' | 'vision_diagram'>('marking');
+  const [isDrillModalOpen, setIsDrillModalOpen] = useState(false);
+  const [uploadedImageBase64, setUploadedImageBase64] = useState<string | null>(null);
+  const [uploadedImageName, setUploadedImageName] = useState<string | null>(null);
 
   // Update available topics when subject changes
   const currentSubjectObj = subjects.find(s => s.name === selectedSubject);
@@ -291,7 +303,8 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
 
   useEffect(() => {
     if (availableTopics.length > 0 && !selectedTopic) {
-      setSelectedTopic(availableTopics[0].title);
+      const firstTopicName = availableTopics[0].name || (availableTopics[0] as any).title;
+      if (firstTopicName) setSelectedTopic(firstTopicName);
     }
   }, [selectedSubject, availableTopics, selectedTopic]);
 
@@ -333,8 +346,21 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
     setStudentAnswer(prev => prev + symbol);
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadedImageName(file.name);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = reader.result as string;
+      setUploadedImageBase64(base64String);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleGradeWithRedPen = async () => {
-    if (!questionText.trim() || !studentAnswer.trim()) return;
+    if (!questionText.trim() && !studentAnswer.trim() && !uploadedImageBase64) return;
 
     setIsGrading(true);
     setEvaluationResult(null);
@@ -347,10 +373,11 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
         body: JSON.stringify({
           subjectName: selectedSubject,
           topicName: selectedTopic || 'General',
-          questionText,
-          studentAnswer,
+          questionText: questionText.trim() || 'Evaluate the handwritten derivation/diagram in the image.',
+          studentAnswer: studentAnswer.trim() || '(See uploaded handwritten work / diagram)',
           totalMarks,
-          examStandard
+          examStandard,
+          imageBase64: uploadedImageBase64
         })
       });
 
@@ -360,8 +387,8 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
           id: 'redpen-' + Date.now(),
           subjectName: selectedSubject,
           topicName: selectedTopic || 'General',
-          questionText,
-          studentAnswer,
+          questionText: questionText.trim() || 'Evaluate the handwritten derivation/diagram in the image.',
+          studentAnswer: studentAnswer.trim() || (uploadedImageName ? `[Uploaded Image: ${uploadedImageName}]` : ''),
           totalMarks: data.totalMarks || totalMarks,
           awardedMarks: data.awardedMarks || 0,
           percentage: data.percentage || 0,
@@ -371,9 +398,17 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
           deductions: data.deductions || [],
           modelAnswer: data.modelAnswer || '',
           examinerTip: data.examinerTip || '',
+          whyUnableToExplain: data.whyUnableToExplain,
+          missingEssentials: data.missingEssentials,
+          examBacklashes: data.examBacklashes,
+          uploadedImageUrl: uploadedImageBase64 || undefined,
+          visionAnalysis: data.visionAnalysis,
           assessedAt: new Date().toISOString()
         };
         setEvaluationResult(result);
+        if (data.visionAnalysis) {
+          setMyAnswerActiveTab('vision_diagram');
+        }
 
         if (onAwardXP) {
           const earnedXP = Math.max(30, Math.round((result.percentage / 100) * 80));
@@ -445,6 +480,17 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
               >
                 <BookmarkPlus className="w-4 h-4 text-rose-500" />
                 <span className="hidden sm:inline">Mistake Vault</span>
+              </button>
+            )}
+
+            {onNavigateToTests && (
+              <button
+                onClick={onNavigateToTests}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-surface-raised hover:bg-theme-accent text-primary border border-theme text-xs font-semibold transition shadow-2xs cursor-pointer"
+                title="Open Timed Board Mock Exam Simulator"
+              >
+                <FileText className="w-4 h-4 text-indigo-500" />
+                <span className="hidden sm:inline">Timed Paper Simulator</span>
               </button>
             )}
           </div>
@@ -1090,9 +1136,12 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
                       onChange={(e) => setSelectedTopic(e.target.value)}
                       className="w-full px-3.5 py-2.5 rounded-xl bg-surface-raised border border-theme text-primary text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/20"
                     >
-                      {availableTopics.map(t => (
-                        <option key={t.id} value={t.title}>{t.title}</option>
-                      ))}
+                      {availableTopics.map(t => {
+                        const tName = t.name || (t as any).title;
+                        return (
+                          <option key={t.id} value={tName}>{tName}</option>
+                        );
+                      })}
                     </select>
                   </div>
                 )}
@@ -1207,12 +1256,56 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-xs font-bold text-primary flex items-center gap-1.5">
                     <PenTool className="w-3.5 h-3.5 text-rose-500" />
-                    <span>Your Written Response</span>
+                    <span>Your Written Response or Handwritten Working</span>
                   </label>
-                  <span className="text-[11px] text-muted">
-                    {studentAnswer.trim().split(/\s+/).filter(Boolean).length} words
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-surface-raised hover:bg-theme-accent border border-theme text-primary text-[11px] font-bold cursor-pointer transition">
+                      <Camera className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>{uploadedImageName ? 'Change Photo' : 'Upload Handwritten Photo'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    <span className="text-[11px] text-muted">
+                      {studentAnswer.trim().split(/\s+/).filter(Boolean).length} words
+                    </span>
+                  </div>
                 </div>
+
+                {/* Uploaded Photo Preview Banner */}
+                {uploadedImageBase64 && (
+                  <div className="mb-2 p-2.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-between gap-3 animate-in fade-in duration-150">
+                    <div className="flex items-center gap-2.5 overflow-hidden">
+                      <img
+                        src={uploadedImageBase64}
+                        alt="Handwritten submission"
+                        className="w-10 h-10 object-cover rounded-lg border border-indigo-500/40"
+                      />
+                      <div className="text-xs truncate">
+                        <span className="font-bold text-indigo-700 dark:text-indigo-300 block truncate">
+                          {uploadedImageName || 'Handwritten sheet uploaded'}
+                        </span>
+                        <span className="text-[10px] text-muted">
+                          Gemini 2.5 Flash Vision enabled: Diagram arrows, formulas, and handwriting will be graded.
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUploadedImageBase64(null);
+                        setUploadedImageName(null);
+                      }}
+                      className="text-muted hover:text-rose-500 p-1 rounded-lg transition cursor-pointer"
+                      title="Remove image"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
 
                 {/* Math Symbols Bar */}
                 <div className="flex items-center gap-1 overflow-x-auto pb-2 scrollbar-none mb-1 text-xs">
@@ -1232,8 +1325,8 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
                 <textarea
                   value={studentAnswer}
                   onChange={(e) => setStudentAnswer(e.target.value)}
-                  placeholder="Write your full exam answer here. State laws, show intermediate steps, equations, and final conclusions with units..."
-                  rows={8}
+                  placeholder={uploadedImageBase64 ? "Optional notes or supplementary explanation for your uploaded handwritten photo..." : "Write your full exam answer here. State laws, show intermediate steps, equations, and final conclusions with units, or click 'Upload Handwritten Photo' above..."}
+                  rows={uploadedImageBase64 ? 4 : 8}
                   className="w-full p-4 rounded-2xl bg-surface-raised border border-theme text-primary text-xs focus:outline-none focus:ring-2 focus:ring-rose-500/20 leading-relaxed font-sans"
                 />
               </div>
@@ -1244,6 +1337,8 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
                   onClick={() => {
                     setStudentAnswer('');
                     setEvaluationResult(null);
+                    setUploadedImageBase64(null);
+                    setUploadedImageName(null);
                   }}
                   className="px-3 py-2 rounded-xl text-xs font-semibold text-muted hover:text-primary transition cursor-pointer"
                 >
@@ -1252,7 +1347,7 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
 
                 <button
                   onClick={handleGradeWithRedPen}
-                  disabled={isGrading || !questionText.trim() || !studentAnswer.trim()}
+                  disabled={isGrading || (!questionText.trim() && !studentAnswer.trim() && !uploadedImageBase64)}
                   className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
                 >
                   {isGrading ? (
@@ -1301,6 +1396,17 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
                     >
                       Red Pen Rubric
                     </button>
+                    {evaluationResult.visionAnalysis && (
+                      <button
+                        onClick={() => setMyAnswerActiveTab('vision_diagram')}
+                        className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                          myAnswerActiveTab === 'vision_diagram' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-muted hover:text-primary'
+                        }`}
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        <span>Vision & Diagram</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => setMyAnswerActiveTab('model_answer')}
                       className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
@@ -1324,6 +1430,87 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Deep Diagnostic Autopsy: Why were you unable to explain to the fullest & Exam Backlashes */}
+                {(evaluationResult.whyUnableToExplain || (evaluationResult.missingEssentials && evaluationResult.missingEssentials.length > 0) || (evaluationResult.examBacklashes && evaluationResult.examBacklashes.length > 0)) && (
+                  <div className="p-4 rounded-2xl bg-amber-500/5 dark:bg-amber-500/10 border border-amber-500/20 space-y-3.5">
+                    <div className="flex items-center justify-between gap-2 border-b border-amber-500/20 pb-2">
+                      <div className="flex items-center gap-2 text-xs font-bold text-amber-800 dark:text-amber-300">
+                        <Target className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                        <span>Diagnostic Autopsy: Why You Couldn't Explain Fully &amp; Board Backlashes</span>
+                      </div>
+                      <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-900 dark:text-amber-200 font-bold">
+                        Examiner Diagnostic
+                      </span>
+                    </div>
+
+                    {/* Why unable to explain to the fullest */}
+                    {evaluationResult.whyUnableToExplain && (
+                      <div className="space-y-1 text-xs">
+                        <div className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                          <HelpCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                          <span>Why you struggled to explain this topic to the fullest:</span>
+                        </div>
+                        <p className="text-primary leading-relaxed pl-5 bg-background/50 p-2.5 rounded-xl border border-amber-500/10">
+                          {evaluationResult.whyUnableToExplain}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Missing Essentials */}
+                    {evaluationResult.missingEssentials && evaluationResult.missingEssentials.length > 0 && (
+                      <div className="space-y-1.5 text-xs">
+                        <div className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                          <span>Essential facts, formulas, or conditions completely missing:</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5 pl-5">
+                          {evaluationResult.missingEssentials.map((item, idx) => (
+                            <span
+                              key={idx}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-background text-rose-700 dark:text-rose-300 border border-rose-500/30 text-[11px] font-medium"
+                            >
+                              <span className="text-rose-500 font-bold">✕</span> {item}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Exam Backlashes */}
+                    {evaluationResult.examBacklashes && evaluationResult.examBacklashes.length > 0 && (
+                      <div className="space-y-1.5 text-xs">
+                        <div className="font-bold text-rose-800 dark:text-rose-300 flex items-center gap-1.5">
+                          <Flame className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          <span>Board Examination Backlashes &amp; Marking Consequences:</span>
+                        </div>
+                        <ul className="space-y-1 pl-5 text-[11px] text-primary">
+                          {evaluationResult.examBacklashes.map((backlash, idx) => (
+                            <li key={idx} className="flex items-start gap-2 bg-rose-500/5 dark:bg-rose-500/10 p-2 rounded-lg border border-rose-500/15">
+                              <span className="text-rose-600 dark:text-rose-400 font-bold shrink-0">⚠️</span>
+                              <span>{backlash}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Option 4: Launch Targeted 2-Minute Drill Re-attempt */}
+                    <div className="pt-2 border-t border-amber-500/20 flex flex-wrap items-center justify-between gap-2.5">
+                      <div className="text-[11px] text-muted">
+                        Recover lost marks instantly with an AI targeted micro-drill:
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsDrillModalOpen(true)}
+                        className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition shadow-2xs cursor-pointer active:scale-95"
+                      >
+                        <Zap className="w-3.5 h-3.5" />
+                        <span>Launch 2-Min Remediation Drill</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Rubric Breakdown */}
                 {myAnswerActiveTab === 'marking' && (
@@ -1420,6 +1607,278 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
                         </div>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Multimodal Vision & Diagram Assessment Tab */}
+                {myAnswerActiveTab === 'vision_diagram' && evaluationResult.visionAnalysis && (
+                  <div className="space-y-4 animate-in fade-in duration-200">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                      <div className="p-3.5 rounded-2xl bg-surface-raised border border-theme">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted block mb-0.5">
+                          Handwriting Legibility
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-base font-bold font-mono ${
+                            evaluationResult.visionAnalysis.handwritingClarity === 'Clear'
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : evaluationResult.visionAnalysis.handwritingClarity === 'Borderline'
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-rose-600 dark:text-rose-400'
+                          }`}>
+                            {evaluationResult.visionAnalysis.handwritingClarity}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-muted">Official board readability standard</span>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-surface-raised border border-theme">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted block mb-0.5">
+                          Diagram Quality Score
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-bold font-mono text-primary">
+                            {evaluationResult.visionAnalysis.diagramAssessment.diagramAccuracyScore}%
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold">
+                            {evaluationResult.visionAnalysis.diagramAssessment.hasDiagram ? 'Diagram Detected' : 'No Diagram'}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-muted">Geometric accuracy & vector rays</span>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-surface-raised border border-theme">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted block mb-0.5">
+                          Visual Pen Deductions
+                        </span>
+                        <div className="text-base font-bold font-mono text-rose-600 dark:text-rose-400">
+                          {evaluationResult.visionAnalysis.annotations?.length || 0} Points Flagged
+                        </div>
+                        <span className="text-[10px] text-muted">Arrows, units, and axes issues</span>
+                      </div>
+                    </div>
+
+                    {/* Interactive Visual Canvas with Red Pen Overlay Marks */}
+                    {evaluationResult.uploadedImageUrl && (
+                      <div className="space-y-2.5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                            <Eye className="w-3.5 h-3.5 text-rose-500" />
+                            <span>Annotated Exam Sheet (Examiner Red Pen SVG Overlay)</span>
+                          </span>
+                          <div className="flex items-center gap-1.5 text-[11px]">
+                            <button
+                              onClick={() => setShowSvgAnnotations(!showSvgAnnotations)}
+                              className={`px-2.5 py-1 rounded-lg border text-xs font-bold transition cursor-pointer ${
+                                showSvgAnnotations 
+                                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300' 
+                                  : 'bg-surface border-theme text-muted hover:text-primary'
+                              }`}
+                            >
+                              {showSvgAnnotations ? '🖊️ Red Pen: ON' : '👁️ Hide Annotations'}
+                            </button>
+                            <div className="flex items-center gap-1 bg-surface-raised border border-theme rounded-lg p-0.5">
+                              {(['all', 'deduction', 'slip', 'correct_tick'] as const).map(f => (
+                                <button
+                                  key={f}
+                                  onClick={() => setActiveAnnoFilter(f)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition capitalize cursor-pointer ${
+                                    activeAnnoFilter === f 
+                                      ? 'bg-primary text-white' 
+                                      : 'text-muted hover:text-primary'
+                                  }`}
+                                >
+                                  {f === 'all' ? 'All' : f === 'correct_tick' ? 'Ticks' : f}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="relative rounded-2xl overflow-hidden border border-theme bg-black/10 flex items-center justify-center max-h-[500px]">
+                          <img
+                            src={evaluationResult.uploadedImageUrl}
+                            alt="Student exam paper"
+                            className="max-h-[500px] w-auto object-contain select-none"
+                          />
+
+                          {/* SVG Canvas Layer for Red Pen Strokes, Underlines & Callouts */}
+                          {showSvgAnnotations && (
+                            <svg 
+                              className="absolute inset-0 w-full h-full pointer-events-none select-none z-10"
+                              viewBox="0 0 100 100"
+                              preserveAspectRatio="none"
+                            >
+                              <defs>
+                                <filter id="redPenGlow" x="-20%" y="-20%" width="140%" height="140%">
+                                  <feDropShadow dx="0" dy="1" stdDeviation="0.5" floodColor="#e11d48" floodOpacity="0.4" />
+                                </filter>
+                              </defs>
+
+                              {evaluationResult.visionAnalysis.annotations?.filter(anno => {
+                                if (activeAnnoFilter === 'all') return true;
+                                if (activeAnnoFilter === 'correct_tick') return anno.type === 'correct_tick';
+                                if (activeAnnoFilter === 'slip') return anno.type === 'slip';
+                                if (activeAnnoFilter === 'deduction') return anno.type === 'deduction' || anno.type === 'missing_arrow' || anno.type === 'unit_error';
+                                return true;
+                              }).map(anno => {
+                                const x = Math.min(95, Math.max(5, anno.xPercent));
+                                const y = Math.min(95, Math.max(5, anno.yPercent));
+                                const isSelected = selectedVisualAnnoId === anno.id;
+                                const isTick = anno.type === 'correct_tick';
+
+                                return (
+                                  <g key={`svg-${anno.id}`} filter="url(#redPenGlow)">
+                                    {/* Red pen handwritten circle / ellipse around the flaw */}
+                                    <ellipse
+                                      cx={x}
+                                      cy={y}
+                                      rx={isSelected ? 4.5 : 3.2}
+                                      ry={isSelected ? 2.8 : 2.0}
+                                      fill="none"
+                                      stroke={isTick ? '#10b981' : '#e11d48'}
+                                      strokeWidth={isSelected ? '0.8' : '0.5'}
+                                      strokeDasharray={isSelected ? 'none' : '1.5 0.5'}
+                                      strokeLinecap="round"
+                                      opacity={isSelected ? 1 : 0.85}
+                                      transform={`rotate(-4 ${x} ${y})`}
+                                    />
+                                    {/* Red pen underline wavy stroke */}
+                                    <path
+                                      d={`M ${x - 3} ${y + 2.5} Q ${x} ${y + 3.2} ${x + 3} ${y + 2.4}`}
+                                      fill="none"
+                                      stroke={isTick ? '#10b981' : '#e11d48'}
+                                      strokeWidth="0.4"
+                                      strokeLinecap="round"
+                                      opacity={0.8}
+                                    />
+                                  </g>
+                                );
+                              })}
+                            </svg>
+                          )}
+
+                          {/* Visual Interactive Annotation Pins */}
+                          {showSvgAnnotations && evaluationResult.visionAnalysis.annotations?.filter(anno => {
+                            if (activeAnnoFilter === 'all') return true;
+                            if (activeAnnoFilter === 'correct_tick') return anno.type === 'correct_tick';
+                            if (activeAnnoFilter === 'slip') return anno.type === 'slip';
+                            if (activeAnnoFilter === 'deduction') return anno.type === 'deduction' || anno.type === 'missing_arrow' || anno.type === 'unit_error';
+                            return true;
+                          }).map((anno) => {
+                            const isSelected = selectedVisualAnnoId === anno.id;
+                            const isTick = anno.type === 'correct_tick';
+
+                            return (
+                              <div
+                                key={anno.id}
+                                style={{
+                                  top: `${Math.min(95, Math.max(5, anno.yPercent))}%`,
+                                  left: `${Math.min(95, Math.max(5, anno.xPercent))}%`
+                                }}
+                                onClick={() => setSelectedVisualAnnoId(isSelected ? null : anno.id)}
+                                className="absolute -translate-x-1/2 -translate-y-1/2 group cursor-pointer z-20"
+                              >
+                                <div className={`w-7 h-7 rounded-full text-[10px] font-bold flex items-center justify-center shadow-lg border-2 border-white transition transform active:scale-95 ${
+                                  isSelected
+                                    ? 'bg-rose-700 text-white ring-4 ring-rose-500/40 scale-110'
+                                    : isTick
+                                    ? 'bg-emerald-600/95 text-white'
+                                    : 'bg-rose-600/90 text-white animate-pulse'
+                                }`}>
+                                  {isTick ? '✓' : anno.marksDelta ? `${anno.marksDelta}` : '!'}
+                                </div>
+
+                                {/* Floating Tooltip */}
+                                <div className={`transition duration-150 absolute z-30 bottom-full left-1/2 -translate-x-1/2 mb-2 w-52 p-3 rounded-2xl bg-surface border border-rose-500/40 text-primary text-[11px] shadow-2xl pointer-events-none ${
+                                  isSelected ? 'opacity-100 block' : 'opacity-0 group-hover:opacity-100'
+                                }`}>
+                                  <div className="flex items-center justify-between font-bold text-rose-600 dark:text-rose-400">
+                                    <span>{anno.label}</span>
+                                    <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-rose-500/10">
+                                      {anno.marksDelta ? `${anno.marksDelta}m` : 'Flagged'}
+                                    </span>
+                                  </div>
+                                  <div className="text-muted text-[10px] mt-1 leading-snug">{anno.comment}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Selected Pin Deep Inspection Card */}
+                        {selectedVisualAnnoId && (() => {
+                          const activeAnno = evaluationResult.visionAnalysis?.annotations?.find(a => a.id === selectedVisualAnnoId);
+                          if (!activeAnno) return null;
+
+                          return (
+                            <div className="p-3.5 rounded-2xl bg-surface-raised border border-rose-500/30 flex items-center justify-between text-xs animate-in fade-in duration-150">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-600 flex items-center justify-center font-bold text-xs">
+                                  {activeAnno.type === 'correct_tick' ? '✓' : activeAnno.marksDelta || '!'}
+                                </div>
+                                <div>
+                                  <div className="font-bold text-primary flex items-center gap-1.5">
+                                    <span>{activeAnno.label}</span>
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-700 dark:text-rose-300 font-mono">
+                                      Location: {Math.round(activeAnno.xPercent)}% X, {Math.round(activeAnno.yPercent)}% Y
+                                    </span>
+                                  </div>
+                                  <p className="text-muted text-[11px] mt-0.5">{activeAnno.comment}</p>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={() => setSelectedVisualAnnoId(null)}
+                                className="p-1 rounded-lg hover:bg-theme-accent text-muted hover:text-primary transition cursor-pointer"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+
+                    {/* Transcription & Visual Flaws List */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      {evaluationResult.visionAnalysis.transcribedText && (
+                        <div className="p-4 rounded-2xl bg-surface-raised border border-theme space-y-2">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-muted">
+                            Optical Transcribed Text (OCR)
+                          </span>
+                          <p className="text-primary text-[11px] leading-relaxed whitespace-pre-line font-mono bg-background p-2.5 rounded-xl border border-theme/50 max-h-48 overflow-y-auto">
+                            {evaluationResult.visionAnalysis.transcribedText}
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="p-4 rounded-2xl bg-surface-raised border border-theme space-y-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
+                          Identified Diagram Traps & Missing Arrows
+                        </span>
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                          {evaluationResult.visionAnalysis.diagramAssessment.missingLabelsOrArrows?.map((issue, idx) => (
+                            <div key={idx} className="p-2 rounded-xl bg-rose-500/10 text-rose-900 dark:text-rose-200 text-[11px] flex items-start gap-1.5">
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                              <span>{issue}</span>
+                            </div>
+                          ))}
+                          {evaluationResult.visionAnalysis.diagramAssessment.geometricOrVectorIssues?.map((issue, idx) => (
+                            <div key={idx} className="p-2 rounded-xl bg-amber-500/10 text-amber-900 dark:text-amber-200 text-[11px] flex items-start gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                              <span>{issue}</span>
+                            </div>
+                          ))}
+                          {(!evaluationResult.visionAnalysis.diagramAssessment.missingLabelsOrArrows?.length &&
+                            !evaluationResult.visionAnalysis.diagramAssessment.geometricOrVectorIssues?.length) && (
+                            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 text-[11px]">
+                              All diagram rays, axes labels, and notations meet standard mark scheme requirements.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -1542,6 +2001,18 @@ export const ExaminersRedPenView: React.FC<ExaminersRedPenViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Targeted 2-Minute Remediation Drill Modal (Option 4) */}
+      <TargetedRemediationDrillModal
+        isOpen={isDrillModalOpen}
+        onClose={() => setIsDrillModalOpen(false)}
+        subjectName={selectedSubject}
+        topicName={selectedTopic || 'Exam Questions'}
+        sourceContext="Examiner Red Pen Deductions"
+        diagnosedRootCause={evaluationResult?.whyUnableToExplain || 'Mark deductions & missing keywords in board response'}
+        missingConcepts={evaluationResult?.missingEssentials || []}
+        onAwardXP={onAwardXP}
+      />
     </div>
   );
 };

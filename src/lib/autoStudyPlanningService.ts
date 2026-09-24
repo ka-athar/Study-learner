@@ -186,69 +186,69 @@ export function generateAdaptivePrepTimeline(params: {
       // Extended preparation timeline (e.g. 5–7 days window)
       stages.push(createStage({
         daysBefore: Math.min(diffDays, 5),
-        title: `Comprehensive Concept Review: ${subjectTopicContext}`,
+        title: `Phase 1: Comprehensive Concept Review (${subjectTopicContext})`,
         description: `Review syllabus lecture notes, core theoretical definitions, and formula sheets for ${subjectName}.`,
         phase: 'research',
         defaultMinutes: 45
       }));
       stages.push(createStage({
         daysBefore: 3,
-        title: `Revision / Learning: High-Yield Topic Drill`,
+        title: `Phase 2: Deep Learning & High-Yield Topic Drill`,
         description: `Active recall, conceptual flashcards, and summary diagram review on ${subjectTopicContext}.`,
         phase: 'research',
         defaultMinutes: 45
       }));
       stages.push(createStage({
         daysBefore: 2,
-        title: `Practice Questions & Problem Sets`,
+        title: `Phase 3: Practice Questions & Problem Drills`,
         description: `Solve past paper questions, timed quiz drills, and identify problem areas.`,
         phase: 'practice',
         defaultMinutes: 50
       }));
       stages.push(createStage({
         daysBefore: 1,
-        title: `Final Revision & Formula Audit`,
+        title: `Phase 4: Final Revision & Formula Audit`,
         description: `Mistake notebook review, high-yield formula check, and calm conceptual consolidation.`,
         phase: 'review',
         defaultMinutes: 30
       }));
       stages.push(createStage({
         daysBefore: 0,
-        title: `Test Day: Attempt ${targetTitle}`,
+        title: `Phase 5 (Test Day): Official Attempt of ${targetTitle}`,
         description: `Execute test calmly, pace questions systematically, and review all answers.`,
         phase: 'submission',
         defaultMinutes: Math.round(totalEstimatedMinutes * 0.5) || 45
       }));
     } else if (diffDays === 3) {
-      // Exact user requested pattern:
-      // - 3 days before: Revision / learning
-      // - 2 days before: Practice questions
-      // - 1 day before: Final revision
-      // - Test day: Attempt test
+      // Exact user requested pattern with explicit Phase numbering:
+      // - Phase 1 (3 days before): Revision / learning
+      // - Phase 2 (2 days before): Practice questions & active drills
+      // - Phase 3 (1 day before): Final revision, mistake audit & formulas
+      // - Phase 4 (Test day): Official test attempt
       stages.push(createStage({
         daysBefore: 3,
-        title: `Revision / Learning: ${subjectTopicContext}`,
+        title: `Phase 1: Revision & Conceptual Foundation (${subjectTopicContext})`,
         description: `Deep conceptual revision of notes, syllabus definitions, and key formulas for ${subjectName}.`,
         phase: 'research',
         defaultMinutes: 45
       }));
       stages.push(createStage({
         daysBefore: 2,
-        title: `Practice Questions & Drills: ${subjectTopicContext}`,
+        title: `Phase 2: Practice Questions & Problem Drills (${subjectTopicContext})`,
         description: `Work through targeted problem sets, mock questions, and active recall drills.`,
         phase: 'practice',
         defaultMinutes: 50
       }));
       stages.push(createStage({
         daysBefore: 1,
-        title: `Final Revision: Mistake Audit & Formulas`,
+        title: `Phase 3: Final Revision, Mistake Audit & Formula Check`,
         description: `Review challenging questions, quick formula sheet check, and final readiness review.`,
         phase: 'review',
         defaultMinutes: 30
       }));
       stages.push(createStage({
         daysBefore: 0,
-        title: `Test Day: Attempt ${targetTitle}`,
+        title: `Phase 4 (Test Day): Official Attempt of ${targetTitle}`,
         description: `Take official test / timed mock, review solutions, and log score afterwards.`,
         phase: 'submission',
         defaultMinutes: 45
@@ -257,21 +257,21 @@ export function generateAdaptivePrepTimeline(params: {
       // 2 days remaining
       stages.push(createStage({
         daysBefore: 2,
-        title: `Revision & Practice Questions: ${subjectTopicContext}`,
+        title: `Phase 1: Revision & High-Yield Practice Drills (${subjectTopicContext})`,
         description: `Focused review of core syllabus concepts combined with high-yield practice drills.`,
         phase: 'practice',
         defaultMinutes: 50
       }));
       stages.push(createStage({
         daysBefore: 1,
-        title: `Final Revision & Formula Audit`,
+        title: `Phase 2: Mistake Audit, Final Revision & Formula Check`,
         description: `Consolidate key concepts, review past mistakes, and double-check high-frequency problem types.`,
         phase: 'review',
         defaultMinutes: 35
       }));
       stages.push(createStage({
         daysBefore: 0,
-        title: `Test Day: Attempt ${targetTitle}`,
+        title: `Phase 3 (Test Day): Official Attempt of ${targetTitle}`,
         description: `Official test attempt and performance tracking.`,
         phase: 'submission',
         defaultMinutes: 45

@@ -525,6 +525,31 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                             </div>
                             <h5 className="text-sm font-bold text-[#4A4E4D]">{t.topicName}</h5>
                             <p className="text-xs text-[#A5A58D] italic">"{t.reason}"</p>
+
+                            {/* ATTACHED TARGETED QUESTIONS (Question-Backed Study Task) */}
+                            {t.targetedQuestions && t.targetedQuestions.length > 0 && (
+                              <div className="mt-2 space-y-1.5 p-2.5 rounded-xl bg-amber-500/10 border border-amber-300/60 text-xs">
+                                <div className="flex items-center gap-1.5 font-bold text-amber-950 text-[11px]">
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>Attached Exam Questions ({t.targetedQuestions.length}):</span>
+                                </div>
+                                <div className="space-y-1">
+                                  {t.targetedQuestions.map((q, qIndex) => (
+                                    <div key={q.id || qIndex} className="p-2 rounded-lg bg-white border border-amber-200 text-[11px] space-y-1">
+                                      <div className="font-medium text-[#2D312E] leading-snug">
+                                        <span className="font-bold text-amber-800 mr-1">Q{qIndex + 1}.</span>
+                                        {q.questionText}
+                                      </div>
+                                      {q.expectedKey && (
+                                        <div className="text-[10px] text-[#6B705C] pl-3 border-l border-amber-300">
+                                          <span className="font-semibold">Key: </span>{q.expectedKey}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
 

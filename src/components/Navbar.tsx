@@ -81,6 +81,8 @@ interface NavbarProps {
   onOpenQRScanner?: () => void;
   onOpenPrintKit?: () => void;
   onOpenAudioStudy?: () => void;
+  onOpenRetentionGraph?: () => void;
+  onOpenMorningWarmup?: () => void;
   onOpenBackupRestore?: () => void;
   onForceSaveCloud?: () => void;
   onSignOut: () => void;
@@ -113,6 +115,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenQRScanner,
   onOpenPrintKit,
   onOpenAudioStudy,
+  onOpenRetentionGraph,
+  onOpenMorningWarmup,
   onOpenBackupRestore,
   onForceSaveCloud,
   onSignOut,
@@ -843,6 +847,58 @@ export const Navbar: React.FC<NavbarProps> = ({
                   Diagnose root cognitive causes for lost marks and drill uncured errors until you achieve a 100% cure rate.
                 </p>
               </div>
+
+              {/* Tool 2b: Cognitive Health Knowledge Graph (Forgetting Curve) */}
+              {onOpenRetentionGraph && (
+                <div
+                  onClick={() => {
+                    setIsToolsModalOpen(false);
+                    onOpenRetentionGraph();
+                  }}
+                  className="p-4 rounded-2xl bg-surface-raised hover:bg-emerald-500/10 border border-emerald-500/30 transition cursor-pointer group space-y-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-600">
+                      <TrendingUp className="w-4 h-4" />
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold">
+                      Ebbinghaus AI
+                    </span>
+                  </div>
+                  <h3 className="text-xs font-bold text-primary group-hover:text-emerald-600 transition-colors">
+                    Cognitive Health Knowledge Graph
+                  </h3>
+                  <p className="text-[11px] text-muted leading-relaxed">
+                    Ebbinghaus forgetting curvature tracking across mock exams & blurt recalls. Uncovers memory decay hotspots.
+                  </p>
+                </div>
+              )}
+
+              {/* Tool 2c: Spaced Repetition Morning Warmup */}
+              {onOpenMorningWarmup && (
+                <div
+                  onClick={() => {
+                    setIsToolsModalOpen(false);
+                    onOpenMorningWarmup();
+                  }}
+                  className="p-4 rounded-2xl bg-surface-raised hover:bg-rose-500/10 border border-rose-500/30 transition cursor-pointer group space-y-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-8 h-8 rounded-xl bg-rose-500/15 flex items-center justify-center text-rose-600">
+                      <Zap className="w-4 h-4" />
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold">
+                      3-Min Warmup
+                    </span>
+                  </div>
+                  <h3 className="text-xs font-bold text-primary group-hover:text-rose-600 transition-colors">
+                    Daily Spaced Mistake Warmup
+                  </h3>
+                  <p className="text-[11px] text-muted leading-relaxed">
+                    Quick morning 3-question autopsy drill directly targeting uncured careless slips and formula confusion.
+                  </p>
+                </div>
+              )}
 
               {/* Tool 3: Voice Socratic Oral Exam (Feynman) */}
               {onOpenVoiceFeynman && (
