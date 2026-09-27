@@ -25,7 +25,8 @@ import {
   Languages,
   Zap,
   BookmarkCheck,
-  FileCheck
+  FileCheck,
+  RotateCcw
 } from 'lucide-react';
 import { ActiveTab, Subject } from '../types';
 
@@ -107,6 +108,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['recall', 'audit', 'refurbish', 'master sheet', 'weakness', 'criteria'],
       action: () => {
         setActiveTab('knowledge_refurbish');
+        onClose();
+      }
+    },
+    {
+      id: '137_revision',
+      title: '1-3-7 Spaced Revision Engine',
+      subtitle: 'First-class Day 0, Day 1, Day 3, and Day 7 memory consolidation command center',
+      category: 'Academic Retrieval',
+      icon: <RotateCcw className="w-4 h-4 text-indigo-500 animate-spin-slow" />,
+      badge: 'Core Priority',
+      keywords: ['1-3-7', 'spaced repetition', 'ebbinghaus', 'day 1', 'day 3', 'day 7', 'retention', 'overdue revisions'],
+      action: () => {
+        setActiveTab('137_revision');
         onClose();
       }
     },

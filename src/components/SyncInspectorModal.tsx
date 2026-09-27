@@ -32,6 +32,8 @@ export interface SyncInspectorDetails {
     flashcardsCount: number;
     assignmentsCount: number;
     testResultsCount: number;
+    sessionsCount?: number;
+    revisionsCount?: number;
   };
   hasPreSyncBackup?: boolean;
 }
@@ -140,7 +142,7 @@ export const SyncInspectorModal: React.FC<SyncInspectorModalProps> = ({
             <h4 className="text-xs font-bold text-muted uppercase tracking-wider mb-2.5">
               Received Data Bundle Summary
             </h4>
-            <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
               <div className={`p-3 rounded-2xl border ${
                 stats.subjectsCount > 0 
                   ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-300' 
@@ -155,21 +157,30 @@ export const SyncInspectorModal: React.FC<SyncInspectorModalProps> = ({
               </div>
 
               <div className="p-3 rounded-2xl bg-theme-surface border border-theme">
+                <div className="text-lg font-extrabold text-primary">{(stats as any).sessionsCount || 0}</div>
+                <div className="text-[11px] font-medium text-muted flex items-center justify-center gap-1">
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Study Logs</span>
+                </div>
+                <div className="text-[10px] text-muted mt-0.5">timers & sessions</div>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300">
+                <div className="text-lg font-extrabold">{(stats as any).revisionsCount || 0}</div>
+                <div className="text-[11px] font-medium flex items-center justify-center gap-1">
+                  <Sparkles className="w-3 h-3" />
+                  <span>1-3-7 Cycles</span>
+                </div>
+                <div className="text-[10px] opacity-75 mt-0.5">spaced retention</div>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-theme-surface border border-theme">
                 <div className="text-lg font-extrabold text-primary">{stats.plansCount}</div>
                 <div className="text-[11px] font-medium text-muted flex items-center justify-center gap-1">
                   <Calendar className="w-3 h-3" />
                   <span>Study Plans</span>
                 </div>
                 <div className="text-[10px] text-muted mt-0.5">tasks & agendas</div>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-theme-surface border border-theme">
-                <div className="text-lg font-extrabold text-primary">{stats.vaultsCount}</div>
-                <div className="text-[11px] font-medium text-muted flex items-center justify-center gap-1">
-                  <Layers className="w-3 h-3" />
-                  <span>Vaults</span>
-                </div>
-                <div className="text-[10px] text-muted mt-0.5">files & materials</div>
               </div>
             </div>
           </div>

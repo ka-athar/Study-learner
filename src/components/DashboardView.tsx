@@ -80,6 +80,7 @@ import { ExamReadinessIndexCard } from './ExamReadinessIndexCard';
 import { SpacedRepetitionCadenceBanner } from './SpacedRepetitionCadenceBanner';
 import { StudyHabitHeatmapCard } from './StudyHabitHeatmapCard';
 import { RetentionForgettingCurveCard } from './RetentionForgettingCurveCard';
+import { DashboardTodayProgressCard } from './DashboardTodayProgressCard';
 import { triggerStudyGoalConfetti } from '../lib/confetti';
 import { sendDailyCompletedWorkEmail } from '../lib/gmailService';
 import { getActiveUserEmail, addActivityLogToDb, resolveActiveUserId } from '../lib/db';
@@ -1017,6 +1018,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
+      {/* TODAY'S PROGRESS SUMMARY CARD (Linked to Study Habits & Progress view) */}
+      <DashboardTodayProgressCard
+        sessions={sessions}
+        todayPlan={todayPlan}
+        revisions={revisions}
+        targetStudyHours={userProfile?.targetHoursPerDay || 3}
+        onOpenStudyHabits={() => setActiveTab('study_habits')}
+      />
+
       {/* HIGH-LEVEL STATS GRID: Total Topics, Completed, Mastered, and Remaining counters */}
       <div className="bg-card border border-theme rounded-3xl p-5 shadow-xs space-y-4 transition-colors">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
@@ -1127,6 +1137,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         revisions={revisions}
         sessions={sessions}
         userProfile={userProfile}
+        onNavigateTab={setActiveTab}
         onStartSprintForTopic={(subj, _ch, top) => {
           if (onOpenZenSprint) onOpenZenSprint(subj, top);
           else onStartTimerForTopic(subj, _ch, top);

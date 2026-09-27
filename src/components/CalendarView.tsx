@@ -25,6 +25,9 @@ import { StudySession, StudyPlan, StudyPlanTopic, TestResult, RevisionItem, User
 import { generateIcsCalendarContent, downloadIcsFile } from '../lib/icsExport';
 import { AICalendarScheduleImporter } from './AICalendarScheduleImporter';
 import { TwoWaySyncModal } from './TwoWaySyncModal';
+import { TestPreparationTimelineCard } from './TestPreparationTimelineCard';
+import { buildTestPreparationTimelines, calculateMultiMonthWorkload } from '../lib/spacedRevisionEngine';
+import { Target, Zap, Activity } from 'lucide-react';
 
 interface CalendarViewProps {
   sessions: StudySession[];
@@ -234,6 +237,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const dayExams = (userProfile?.examDates || []).filter(e => e.date === selectedDayStr);
   const dayRevisions = revisions.filter(r => r.dueDate === selectedDayStr);
 
+  // Multi-Month Workload Analysis
+  const [calendarSubView, setCalendarSubView] = useState<'calendar' | 'test_prep' | 'workload'>('calendar');
+  const testTimelines = React.useMemo(() => {
+    return buildTestPreparationTimelines(subjects, assignments, sessions, revisions);
+  }, [subjects, assignments, sessions, revisions]);
+
+  const workloadDiagnostics = React.useMemo(() => {
+    return calculateMultiMonthWorkload(plans, revisions, assignments, 30);
+  }, [plans, revisions, assignments]);
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header Bar */}
@@ -241,11 +254,50 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         <div>
           <h2 className="text-xl font-serif italic font-bold text-[#6B705C] flex items-center gap-2">
             <CalendarIcon className="w-5 h-5 text-[#6B705C]" />
-            <span>Academic Study Calendar</span>
+            <span>Academic Study Calendar & Timeline</span>
           </h2>
           <p className="text-xs text-[#A5A58D] mt-1">
-            View, analyze, and preset your weekly and monthly study schedules with AI.
+            Distinguishing <strong>WHEN</strong> (Calendar), <strong>WHAT</strong> (Planner), <strong>1-3-7 REVISIONS</strong>, and <strong>TEST PREPARATION</strong>.
           </p>
+        </div>
+
+        {/* View Switcher Tabs */}
+        <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-[#F9F7F2] border border-[#E0DBD0]">
+          <button
+            onClick={() => setCalendarSubView('calendar')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              calendarSubView === 'calendar'
+                ? 'bg-[#6B705C] text-white shadow-xs'
+                : 'text-[#6B705C] hover:bg-[#F2EFE9]'
+            }`}
+          >
+            <CalendarIcon className="w-3.5 h-3.5" />
+            <span>Calendar</span>
+          </button>
+
+          <button
+            onClick={() => setCalendarSubView('test_prep')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              calendarSubView === 'test_prep'
+                ? 'bg-purple-700 text-white shadow-xs'
+                : 'text-purple-800 hover:bg-purple-50'
+            }`}
+          >
+            <Target className="w-3.5 h-3.5" />
+            <span>Test Timelines ({testTimelines.length})</span>
+          </button>
+
+          <button
+            onClick={() => setCalendarSubView('workload')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              calendarSubView === 'workload'
+                ? 'bg-indigo-700 text-white shadow-xs'
+                : 'text-indigo-800 hover:bg-indigo-50'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>Multi-Month Workload</span>
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -333,7 +385,114 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         )}
       </div>
 
-      {/* Calendar Grid & Day Details */}
+      {/* Calendar Grid & Day Details OR Alternate SubViews */}
+      {calendarSubView === 'test_prep' ? (
+        <div className="space-y-6">
+          <div className="bg-white border border-[#E0DBD0] rounded-3xl p-6 shadow-xs flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-purple-900 flex items-center gap-2">
+                <Target className="w-5 h-5 text-purple-700" />
+                <span>Active Test Preparation Engines ({testTimelines.length})</span>
+              </h3>
+              <p className="text-xs text-[#A5A58D] mt-0.5">
+                Every test scheduled in your calendar triggers this strategic backward-planning countdown covering all audited SLOs.
+              </p>
+            </div>
+            <button
+              onClick={() => setCalendarSubView('calendar')}
+              className="px-3 py-1.5 rounded-xl border border-[#E0DBD0] text-xs font-bold text-[#6B705C] hover:bg-[#F2EFE9] transition"
+            >
+              ← Back to Calendar
+            </button>
+          </div>
+
+          {testTimelines.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {testTimelines.map(timeline => (
+                <TestPreparationTimelineCard
+                  key={timeline.testId}
+                  timeline={timeline}
+                  onStartTimerForTopic={onStartTimerForTopic || (() => {})}
+                  onNavigateTab={setActiveTab}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="p-12 text-center rounded-3xl bg-white border border-[#E0DBD0] space-y-3">
+              <Target className="w-12 h-12 text-purple-400 mx-auto" />
+              <h4 className="font-bold text-base text-[#4A4E4D]">No Upcoming Tests or Exams Found</h4>
+              <p className="text-xs text-[#A5A58D] max-w-md mx-auto">
+                Schedule an exam or past paper in the Assignments/Tests view or use the quick task adder to automatically generate your preparation timeline!
+              </p>
+            </div>
+          )}
+        </div>
+      ) : calendarSubView === 'workload' ? (
+        <div className="space-y-6">
+          <div className="bg-white border border-[#E0DBD0] rounded-3xl p-6 shadow-xs flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+                <Activity className="w-5 h-5 text-indigo-700" />
+                <span>Multi-Month Study Workload & Stress Diagnostic</span>
+              </h3>
+              <p className="text-xs text-[#A5A58D] mt-0.5">
+                Scans 30+ days ahead across Planner tasks, 1-3-7 Spaced Revisions, and Exam Dates to identify burnout risks and conflicts.
+              </p>
+            </div>
+            <button
+              onClick={() => setCalendarSubView('calendar')}
+              className="px-3 py-1.5 rounded-xl border border-[#E0DBD0] text-xs font-bold text-[#6B705C] hover:bg-[#F2EFE9] transition"
+            >
+              ← Back to Calendar
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-7 gap-3">
+            {workloadDiagnostics.map(diag => (
+              <div
+                key={diag.date}
+                onClick={() => {
+                  setSelectedDayStr(diag.date);
+                  setCalendarSubView('calendar');
+                }}
+                className={`p-3 rounded-2xl border transition cursor-pointer flex flex-col justify-between h-32 ${
+                  diag.pressureLevel === 'burnout_risk'
+                    ? 'bg-rose-500/10 border-rose-500/40 text-rose-900'
+                    : diag.pressureLevel === 'overloaded'
+                    ? 'bg-amber-500/10 border-amber-500/40 text-amber-900'
+                    : diag.pressureLevel === 'moderate'
+                    ? 'bg-blue-500/5 border-blue-500/20 text-blue-900'
+                    : 'bg-white border-[#E0DBD0] text-[#4A4E4D]'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between text-[10px] font-mono font-bold">
+                    <span>{diag.date.slice(5)}</span>
+                    {diag.isTestDay && <span className="px-1 rounded bg-purple-600 text-white text-[8px]">EXAM</span>}
+                  </div>
+                  <div className="text-sm font-extrabold mt-1">
+                    {diag.totalCommitmentHours} hrs
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-[10px] opacity-80 flex items-center justify-between">
+                    <span>Plans: {diag.plannedTasksCount}</span>
+                    <span>1-3-7: {diag.revisionsDue137Count}</span>
+                  </div>
+                  <div className={`h-1.5 w-full rounded-full ${
+                    diag.pressureLevel === 'burnout_risk'
+                      ? 'bg-rose-600'
+                      : diag.pressureLevel === 'overloaded'
+                      ? 'bg-amber-500'
+                      : 'bg-emerald-500'
+                  }`} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Calendar Grid */}
         <div className="lg:col-span-2 bg-white border border-[#E0DBD0] rounded-3xl p-6 shadow-xs space-y-4">
@@ -782,6 +941,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </div>
         </div>
       </div>
+      )}
 
       {/* Export .ICS Modal */}
       {isExportModalOpen && (

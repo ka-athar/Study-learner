@@ -45,7 +45,8 @@ import {
   MessageSquare,
   Target,
   AlertTriangle,
-  Flame
+  Flame,
+  Plus
 } from 'lucide-react';
 import { 
   Subject, 
@@ -63,6 +64,7 @@ import { compressImageFile } from '../lib/base64Utils';
 import { addMistake } from '../lib/mistakeVaultStorage';
 import { recordTopicRecallOutcome } from '../lib/retentionGraphStorage';
 import { generateCompletedWorkWhatsAppMessage, buildWhatsAppDirectUrl } from '../lib/whatsappHelper';
+import { calculate137Milestones } from '../lib/spacedRevisionEngine';
 import { TargetedRemediationDrillModal } from './TargetedRemediationDrillModal';
 import { 
   sendStudySessionEmail, 
@@ -77,7 +79,18 @@ interface StudyTimerViewProps {
   initialSubject?: string;
   initialChapter?: string;
   initialTopic?: string;
+  initialDurationMinutes?: number;
   onSaveSession: (session: Omit<StudySession, 'id'>) => void;
+  onAddTo137Cycle?: (params: {
+    subjectName: string;
+    chapterName: string;
+    topicName: string;
+    sloCode?: string;
+    sloName?: string;
+    studyDate?: string;
+    timeSpentMinutes?: number;
+    notes?: string;
+  }) => void;
   userProfile?: UserProfile | null;
   sessions?: StudySession[];
   user?: any;
@@ -123,7 +136,9 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
   initialSubject,
   initialChapter,
   initialTopic,
+  initialDurationMinutes,
   onSaveSession,
+  onAddTo137Cycle,
   userProfile = null,
   sessions = [],
   user = null,
@@ -153,6 +168,14 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
   const [selectedTopicName, setSelectedTopicName] = useState<string>(
     initialTopic || selectedChapter?.topics[0]?.name || ''
   );
+  const selectedTopic = selectedChapter?.topics.find(t => t.name === selectedTopicName) || selectedChapter?.topics[0];
+
+  const [selectedSloCode, setSelectedSloCode] = useState<string>(
+    selectedTopic?.subtopics?.[0]?.sloCode || ''
+  );
+
+  // 1-3-7 Spaced Cycle opt-in on session completion (Method 1)
+  const [addTo137OnFinish, setAddTo137OnFinish] = useState<boolean>(true);
 
   // Focus Mode & Ambient Audio state
   const [isFocusMode, setIsFocusMode] = useState<boolean>(false);
@@ -210,6 +233,15 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
     }
   });
 
+  // Vintage Calligraphic & Cursive Numerals Typography Style
+  const [timerFontStyle, setTimerFontStyle] = useState<'calligraphic' | 'cursive' | 'serif'>(() => {
+    try {
+      return (localStorage.getItem('studyflow_timer_font_style') as any) || 'calligraphic';
+    } catch {
+      return 'calligraphic';
+    }
+  });
+
   // Bilingual Voice-to-Text Dictation (English / اردو)
   const [isListening, setIsListening] = useState<boolean>(false);
   const [speechLang, setSpeechLang] = useState<'en-US' | 'ur-PK'>('en-US');
@@ -242,7 +274,13 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
     if (initialTopic) {
       setSelectedTopicName(initialTopic);
     }
-  }, [initialSubject, initialChapter, initialTopic, subjects]);
+    if (initialDurationMinutes && initialDurationMinutes > 0) {
+      setTargetMinutes(initialDurationMinutes);
+      setSecondsLeft(initialDurationMinutes * 60);
+      setIsActive(false);
+      setIsPaused(false);
+    }
+  }, [initialSubject, initialChapter, initialTopic, initialDurationMinutes, subjects]);
 
   useEffect(() => {
     if (selectedSubject) {
@@ -259,6 +297,16 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
       }
     }
   }, [selectedChapterName, selectedChapter, selectedTopicName]);
+
+  useEffect(() => {
+    if (selectedTopic && selectedTopic.subtopics && selectedTopic.subtopics.length > 0) {
+      if (!selectedTopic.subtopics.some(sub => sub.sloCode === selectedSloCode)) {
+        setSelectedSloCode(selectedTopic.subtopics[0].sloCode || '');
+      }
+    } else {
+      setSelectedSloCode('');
+    }
+  }, [selectedTopic, selectedTopicName]);
 
   // Compute accumulated saved study time for this specific topic
   const topicSavedStats = useMemo(() => {
@@ -346,7 +394,15 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
     result: string;
     notes?: string;
     date: string;
+    sloCode?: string;
+    sloName?: string;
+    addedTo137?: boolean;
   } | null>(null);
+
+  // Multi-Channel Delivery State (Email + WhatsApp simultaneous or selective)
+  const [sendEmailOnFinish, setSendEmailOnFinish] = useState<boolean>(true);
+  const [sendWhatsAppOnFinish, setSendWhatsAppOnFinish] = useState<boolean>(() => !!(userProfile?.whatsappNumber));
+  const [recipientPhoneInput, setRecipientPhoneInput] = useState<string>(() => userProfile?.whatsappNumber || '');
 
   // Relevant subject notes to pass into AI evaluation
   const relevantNotes = useMemo(() => {
@@ -993,6 +1049,85 @@ Return JSON formatted with:
     setSecondsLeft(targetMinutes * 60);
   };
 
+  /**
+   * Adds more time on the fly without resetting progress
+   */
+  const handleExtendTimer = (additionalMinutes: number) => {
+    setTargetMinutes(prev => prev + additionalMinutes);
+    setSecondsLeft(prev => prev + additionalMinutes * 60);
+    setSessionLoggedMinutes(prev => prev + additionalMinutes);
+    if (!isActive) {
+      setIsActive(true);
+      setIsPaused(false);
+    }
+    playChime();
+    setEmailNotification({
+      type: 'info',
+      text: `⏱️ Extended session by +${additionalMinutes}m! New focus target: ${targetMinutes + additionalMinutes} mins.`
+    });
+  };
+
+  /**
+   * Dispatches WhatsApp study session debrief via direct link
+   */
+  const handleWhatsAppSession = (sessionData: {
+    subjectName: string;
+    chapterName: string;
+    topicName: string;
+    durationMinutes: number;
+    startTime?: string;
+    endTime?: string;
+    result?: string;
+    notes?: string;
+    date?: string;
+    sloCode?: string;
+    sloName?: string;
+    addedTo137?: boolean;
+  }) => {
+    const todayStr = sessionData.date || new Date().toISOString().split('T')[0];
+    const todayTotal = (sessions || [])
+      .filter(s => s.date === todayStr)
+      .reduce((sum, s) => sum + (s.durationMinutes || 0), 0) + sessionData.durationMinutes;
+
+    const milestones = calculate137Milestones(todayStr);
+
+    const msg = generateCompletedWorkWhatsAppMessage({
+      studentName: userProfile?.name || user?.displayName || 'Student',
+      subjectName: sessionData.subjectName,
+      chapterName: sessionData.chapterName,
+      topicName: sessionData.topicName,
+      sloCode: sessionData.sloCode,
+      sloName: sessionData.sloName,
+      durationMinutes: sessionData.durationMinutes,
+      todayTotalMinutes: todayTotal,
+      streak: userProfile?.studyStreak || 1,
+      status: sessionData.result || 'Completed',
+      notes: sessionData.notes,
+      addedTo137: sessionData.addedTo137,
+      cycleDates: sessionData.addedTo137 ? {
+        day1: milestones.day1,
+        day3: milestones.day3,
+        day7: milestones.day7
+      } : undefined
+    });
+
+    const targetPhone = recipientPhoneInput.trim() || userProfile?.whatsappNumber || '';
+    const url = buildWhatsAppDirectUrl(targetPhone, msg);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    setEmailNotification({
+      type: 'success',
+      text: `📲 WhatsApp debrief link prepared and opened!`
+    });
+  };
+
   const handleEmailSession = async (sessionData: {
     subjectName: string;
     chapterName: string;
@@ -1102,7 +1237,10 @@ Return JSON formatted with:
     }
   };
 
-  const handleSaveResult = async (sendEmail: boolean = false) => {
+  const handleSaveResult = async (options?: { sendEmail?: boolean; sendWhatsApp?: boolean }) => {
+    const shouldEmail = options?.sendEmail !== undefined ? options.sendEmail : sendEmailOnFinish;
+    const shouldWhatsApp = options?.sendWhatsApp !== undefined ? options.sendWhatsApp : sendWhatsAppOnFinish;
+
     const endNow = new Date();
     const endTimeStr = endNow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const todayStr = endNow.toISOString().split('T')[0];
@@ -1114,6 +1252,8 @@ Return JSON formatted with:
       ? `Feynman Blurt: "${feynmanBlurt.trim()}". ${sessionNotes ? `Notes: ${sessionNotes}` : ''}`
       : sessionNotes;
 
+    const sloObj = selectedTopic?.subtopics?.find(s => s.sloCode === selectedSloCode);
+
     const sessionPayload: Omit<StudySession, 'id'> = {
       userId: '',
       date: todayStr,
@@ -1123,6 +1263,9 @@ Return JSON formatted with:
       subjectName: selectedSubjectName,
       chapterName: selectedChapterName,
       topicName: selectedTopicName,
+      sloCode: selectedSloCode || undefined,
+      sloName: sloObj?.name || undefined,
+      addedTo137: addTo137OnFinish,
       result: selectedResult,
       notes: combinedNotes,
       timestamp: startTimestampRef.current || Date.now()
@@ -1134,17 +1277,36 @@ Return JSON formatted with:
       date: todayStr
     });
 
+    if (addTo137OnFinish && onAddTo137Cycle) {
+      onAddTo137Cycle({
+        subjectName: selectedSubjectName,
+        chapterName: selectedChapterName,
+        topicName: selectedTopicName,
+        sloCode: selectedSloCode || undefined,
+        sloName: sloObj?.name || undefined,
+        studyDate: todayStr,
+        timeSpentMinutes: finalDuration,
+        notes: combinedNotes
+      });
+    }
+
     setIsFinishModalOpen(false);
     setSessionNotes('');
     setFeynmanBlurt('');
     setSecondsLeft(targetMinutes * 60);
 
-    if (sendEmail) {
+    // Multi-channel dispatch: Send to Email, WhatsApp, or BOTH
+    if (shouldEmail && shouldWhatsApp) {
       await handleEmailSession(sessionPayload);
+      handleWhatsAppSession(sessionPayload);
+    } else if (shouldEmail) {
+      await handleEmailSession(sessionPayload);
+    } else if (shouldWhatsApp) {
+      handleWhatsAppSession(sessionPayload);
     } else {
       setEmailNotification({
         type: 'info',
-        text: `Session saved! (${finalDuration}m on ${selectedTopicName}). You can email yourself the recap anytime.`
+        text: `Session saved! (${finalDuration}m on ${selectedTopicName})${addTo137OnFinish ? ' + Added to 1-3-7 Spaced Revision' : ''}.`
       });
     }
   };
@@ -1160,6 +1322,8 @@ Return JSON formatted with:
       ? `Feynman Blurt: "${feynmanBlurt.trim()}". ${sessionNotes ? `Notes: ${sessionNotes}` : ''}`
       : sessionNotes;
 
+    const sloObj = selectedTopic?.subtopics?.find(s => s.sloCode === selectedSloCode);
+
     const sessionPayload: Omit<StudySession, 'id'> = {
       userId: '',
       date: todayStr,
@@ -1169,6 +1333,9 @@ Return JSON formatted with:
       subjectName: selectedSubjectName,
       chapterName: selectedChapterName,
       topicName: selectedTopicName,
+      sloCode: selectedSloCode || undefined,
+      sloName: sloObj?.name || undefined,
+      addedTo137: addTo137OnFinish,
       result: selectedResult,
       notes: combinedNotes,
       timestamp: startTimestampRef.current || Date.now()
@@ -1179,6 +1346,20 @@ Return JSON formatted with:
       ...sessionPayload,
       date: todayStr
     });
+
+    if (addTo137OnFinish && onAddTo137Cycle) {
+      const sloObj = selectedTopic?.subtopics?.find(s => s.sloCode === selectedSloCode);
+      onAddTo137Cycle({
+        subjectName: selectedSubjectName,
+        chapterName: selectedChapterName,
+        topicName: selectedTopicName,
+        sloCode: selectedSloCode || undefined,
+        sloName: sloObj?.name || undefined,
+        studyDate: todayStr,
+        timeSpentMinutes: finalDuration,
+        notes: combinedNotes
+      });
+    }
 
     setIsFinishModalOpen(false);
     if (feynmanBlurt.trim()) {
@@ -1193,10 +1374,12 @@ Return JSON formatted with:
     handleGenerateBlurtPrompt();
   };
 
-  // Format MM:SS
+  // Format Minutes & Seconds for Vintage Calligraphic representation
   const mins = Math.floor(secondsLeft / 60);
   const secs = secondsLeft % 60;
-  const formattedTime = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  const minsFormatted = String(mins).padStart(2, '0');
+  const secsFormatted = String(secs).padStart(2, '0');
+  const formattedTime = `${minsFormatted}.${secsFormatted}`;
 
   const progressPercent = Math.min(
     100,
@@ -1327,10 +1510,19 @@ Return JSON formatted with:
             <button
               onClick={() => handleEmailSession(lastSavedSession)}
               disabled={isSendingEmail}
-              className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-bold flex items-center gap-2 hover:opacity-90 transition cursor-pointer shrink-0 shadow-xs disabled:opacity-50 min-h-[38px]"
+              className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-bold flex items-center gap-1.5 hover:opacity-90 transition cursor-pointer shrink-0 shadow-xs disabled:opacity-50 min-h-[38px]"
             >
               {isSendingEmail ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
               <span>Email Session</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleWhatsAppSession(lastSavedSession)}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 shadow-xs min-h-[38px]"
+              title="Share this study session debrief via WhatsApp"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>WhatsApp</span>
             </button>
             <button
               type="button"
@@ -1443,8 +1635,16 @@ Return JSON formatted with:
                 {isActive && !isPaused && (
                   <div className={`absolute -inset-6 sm:-inset-10 ${timerThemeClasses.glow} rounded-full blur-2xl pointer-events-none animate-pulse`}></div>
                 )}
-                <div className={`text-7xl sm:text-9xl md:text-[10rem] font-mono font-bold tracking-tight ${timerThemeClasses.text} tabular-nums relative select-none transition-colors`}>
-                  {formattedTime}
+                <div className={`text-7xl sm:text-9xl md:text-[9.5rem] tracking-tight ${timerThemeClasses.text} relative select-none transition-all flex items-baseline justify-center font-normal ${
+                  timerFontStyle === 'cursive' 
+                    ? 'font-vintage-cursive italic' 
+                    : timerFontStyle === 'serif'
+                    ? 'font-serif'
+                    : 'font-calligraphic italic'
+                }`}>
+                  <span className="font-light">{minsFormatted}</span>
+                  <span className="opacity-40 mx-1 sm:mx-1.5 text-[0.65em] font-light select-none">.</span>
+                  <span className="font-light text-[0.88em] opacity-90">{secsFormatted}</span>
                 </div>
               </div>
 
@@ -1584,6 +1784,46 @@ Return JSON formatted with:
                 </button>
               </div>
 
+              {/* Quick Add More Time Pills */}
+              <div className="w-full flex items-center justify-center gap-1.5 pt-1 flex-wrap">
+                <span className="text-[11px] font-bold text-muted mr-1 flex items-center gap-1">
+                  <Plus className="w-3 h-3 text-primary" />
+                  <span>Add Time:</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleExtendTimer(5)}
+                  className="px-2.5 py-1 rounded-full bg-theme-accent hover:bg-emerald-500/15 hover:text-emerald-700 dark:hover:text-emerald-300 border border-theme text-xs font-bold text-primary transition cursor-pointer active:scale-95 shadow-2xs"
+                  title="Add 5 minutes to current timer"
+                >
+                  +5m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExtendTimer(10)}
+                  className="px-2.5 py-1 rounded-full bg-theme-accent hover:bg-emerald-500/15 hover:text-emerald-700 dark:hover:text-emerald-300 border border-theme text-xs font-bold text-primary transition cursor-pointer active:scale-95 shadow-2xs"
+                  title="Add 10 minutes to current timer"
+                >
+                  +10m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExtendTimer(15)}
+                  className="px-2.5 py-1 rounded-full bg-theme-accent hover:bg-emerald-500/15 hover:text-emerald-700 dark:hover:text-emerald-300 border border-theme text-xs font-bold text-primary transition cursor-pointer active:scale-95 shadow-2xs"
+                  title="Add 15 minutes to current timer"
+                >
+                  +15m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExtendTimer(25)}
+                  className="px-2.5 py-1 rounded-full bg-theme-accent hover:bg-emerald-500/15 hover:text-emerald-700 dark:hover:text-emerald-300 border border-theme text-xs font-bold text-primary transition cursor-pointer active:scale-95 shadow-2xs"
+                  title="Add 25 minutes to current timer"
+                >
+                  +25m
+                </button>
+              </div>
+
               {/* Keyboard Hotkeys Hint */}
               <div className="w-full flex items-center justify-center gap-3 pt-2 text-[11px] font-mono text-muted select-none flex-wrap">
                 <span className="flex items-center gap-1">
@@ -1612,7 +1852,7 @@ Return JSON formatted with:
                   <span>Target Subject & Topic</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   {/* Subject Dropdown */}
                   <div>
                     <label className="block text-[11px] font-bold text-muted uppercase tracking-widest mb-1">Subject</label>
@@ -1676,6 +1916,34 @@ Return JSON formatted with:
                           {tp.status === 'Mastered' ? '⭐ ' : tp.status === 'Completed' ? '✓ ' : ''}{tp.name}
                         </option>
                       ))}
+                    </select>
+                  </div>
+
+                  {/* SLO / Learning Outcome */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-muted uppercase tracking-widest">SLO Target</label>
+                      {selectedSloCode && (
+                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
+                          {selectedSloCode}
+                        </span>
+                      )}
+                    </div>
+                    <select
+                      disabled={isActive}
+                      value={selectedSloCode}
+                      onChange={(e) => setSelectedSloCode(e.target.value)}
+                      className="w-full p-2.5 bg-card border border-theme rounded-xl text-xs text-primary focus:outline-none focus:border-primary font-semibold min-h-[42px] cursor-pointer"
+                    >
+                      {selectedTopic?.subtopics && selectedTopic.subtopics.length > 0 ? (
+                        selectedTopic.subtopics.map((sub, idx) => (
+                          <option key={sub.id || idx} value={sub.sloCode || `SLO-${idx + 1}`}>
+                            {sub.sloCode ? `[${sub.sloCode}] ` : ''}{sub.name}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">General Topic Mastery (All SLOs)</option>
+                      )}
                     </select>
                   </div>
                 </div>
@@ -1783,13 +2051,40 @@ Return JSON formatted with:
                 </div>
               </div>
 
-              {/* Original & Custom Timer Color Palette Selector */}
-              <div className="flex items-center justify-center gap-1.5 flex-wrap pt-0.5">
+              {/* Original & Custom Timer Color & Typography Style Selectors */}
+              <div className="flex items-center justify-center gap-2 flex-wrap pt-0.5">
+                {/* Vintage Calligraphic Typography Selector */}
+                <div className="flex items-center gap-1.5 bg-surface border border-theme rounded-full px-3 py-1 text-[11px] font-mono text-muted shadow-2xs flex-wrap justify-center">
+                  <span className="font-semibold mr-1">Typography:</span>
+                  {[
+                    { id: 'calligraphic', label: '🖋️ Vintage Calligraphic' },
+                    { id: 'cursive', label: '📜 Calligraphic Cursive' },
+                    { id: 'serif', label: '🏛️ Editorial Serif' },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => {
+                        setTimerFontStyle(f.id as any);
+                        try { localStorage.setItem('studyflow_timer_font_style', f.id); } catch {}
+                      }}
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition cursor-pointer flex items-center gap-1 min-h-[26px] ${
+                        timerFontStyle === f.id
+                          ? 'bg-primary text-white shadow-xs'
+                          : 'text-muted hover:text-primary hover:bg-theme-accent'
+                      }`}
+                    >
+                      <span>{f.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Color Palette Selector */}
                 <div className="flex items-center gap-1.5 bg-surface border border-theme rounded-full px-3 py-1 text-[11px] font-mono text-muted shadow-2xs flex-wrap justify-center">
                   <Palette className="w-3.5 h-3.5 text-muted" />
-                  <span className="font-semibold mr-1">Timer Color:</span>
+                  <span className="font-semibold mr-1">Color:</span>
                   {[
-                    { id: 'original_sage', label: 'Classic Sage (Original)', hex: '#6B705C' },
+                    { id: 'original_sage', label: 'Classic Sage', hex: '#6B705C' },
                     { id: 'emerald', label: 'Emerald', hex: '#059669' },
                     { id: 'amber', label: 'Amber', hex: '#D97706' },
                     { id: 'classic', label: 'Obsidian', hex: '#374151' },
@@ -1801,7 +2096,7 @@ Return JSON formatted with:
                         setTimerColorTheme(t.id as any);
                         try { localStorage.setItem('studyflow_timer_color_theme', t.id); } catch {}
                       }}
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition cursor-pointer flex items-center gap-1.5 min-h-[26px] ${
+                      className={`px-2 py-1 rounded-full text-[10px] font-bold transition cursor-pointer flex items-center gap-1.5 min-h-[26px] ${
                         timerColorTheme === t.id
                           ? 'bg-primary text-white shadow-xs'
                           : 'text-muted hover:text-primary hover:bg-theme-accent'
@@ -1814,10 +2109,18 @@ Return JSON formatted with:
                 </div>
               </div>
 
-              {/* Monumental Crisp Digital Clock */}
+              {/* Vintage Calligraphic Clock Face */}
               <div className="text-center space-y-3 sm:space-y-4 py-2 sm:py-4">
-                <div className={`text-6xl sm:text-8xl md:text-9xl font-mono font-bold tracking-tight ${timerThemeClasses.text} tabular-nums select-none transition-colors`}>
-                  {formattedTime}
+                <div className={`text-6xl sm:text-8xl md:text-9xl tracking-tight ${timerThemeClasses.text} select-none transition-all flex items-baseline justify-center font-normal ${
+                  timerFontStyle === 'cursive' 
+                    ? 'font-vintage-cursive italic' 
+                    : timerFontStyle === 'serif'
+                    ? 'font-serif'
+                    : 'font-calligraphic italic'
+                }`}>
+                  <span className="font-light">{minsFormatted}</span>
+                  <span className="opacity-40 mx-1 sm:mx-1.5 text-[0.65em] font-light select-none">.</span>
+                  <span className="font-light text-[0.88em] opacity-90">{secsFormatted}</span>
                 </div>
 
                 <p className={`text-xs font-mono font-bold ${timerThemeClasses.text} tracking-widest uppercase`}>
@@ -1920,6 +2223,31 @@ Return JSON formatted with:
                   title="Reset Timer"
                 >
                   <RotateCcw className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Quick Add Time (Zen Mode) */}
+              <div className="w-full flex items-center justify-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleExtendTimer(5)}
+                  className="px-3 py-1 rounded-full bg-surface-raised border border-theme text-xs font-bold text-primary hover:bg-emerald-500/15 hover:text-emerald-700 transition cursor-pointer active:scale-95 shadow-2xs"
+                >
+                  +5m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExtendTimer(10)}
+                  className="px-3 py-1 rounded-full bg-surface-raised border border-theme text-xs font-bold text-primary hover:bg-emerald-500/15 hover:text-emerald-700 transition cursor-pointer active:scale-95 shadow-2xs"
+                >
+                  +10m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExtendTimer(15)}
+                  className="px-3 py-1 rounded-full bg-surface-raised border border-theme text-xs font-bold text-primary hover:bg-emerald-500/15 hover:text-emerald-700 transition cursor-pointer active:scale-95 shadow-2xs"
+                >
+                  +15m
                 </button>
               </div>
             </>
@@ -2689,10 +3017,18 @@ Return JSON formatted with:
               </button>
             </div>
 
-            {/* Monumental Center Clock */}
-            <div className="max-w-2xl w-full mx-auto my-auto text-center space-y-6">
-              <div className="text-8xl sm:text-[10rem] md:text-[12rem] font-mono font-bold tracking-tight text-primary tabular-nums">
-                {formattedTime}
+            {/* Monumental Vintage Calligraphic Center Clock */}
+            <div className="max-w-3xl w-full mx-auto my-auto text-center space-y-6">
+              <div className={`text-8xl sm:text-[11rem] md:text-[13rem] tracking-tight text-primary select-none flex items-baseline justify-center font-normal ${
+                timerFontStyle === 'cursive' 
+                  ? 'font-vintage-cursive italic' 
+                  : timerFontStyle === 'serif'
+                  ? 'font-serif'
+                  : 'font-calligraphic italic'
+              }`}>
+                <span className="font-light">{minsFormatted}</span>
+                <span className="opacity-40 mx-2 sm:mx-3 text-[0.65em] font-light select-none">.</span>
+                <span className="font-light text-[0.88em] opacity-90">{secsFormatted}</span>
               </div>
               <p className="text-xs font-mono font-bold tracking-widest text-muted uppercase">
                 {isActive ? (isPaused ? '⏸ SESSION PAUSED' : '⚡ DEEP FOCUS ACTIVE') : 'READY'}
@@ -2824,6 +3160,61 @@ Return JSON formatted with:
               </div>
             </div>
 
+            {/* Need More Time? Extension Bar */}
+            <div className="p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <span className="font-bold text-xs text-primary flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  <span>Not finished with your work yet?</span>
+                </span>
+                <p className="text-[11px] text-muted leading-tight">
+                  Add more time and keep your study session active without losing progress.
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsFinishModalOpen(false);
+                    handleExtendTimer(5);
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition active:scale-95 cursor-pointer"
+                >
+                  +5m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsFinishModalOpen(false);
+                    handleExtendTimer(10);
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition active:scale-95 cursor-pointer"
+                >
+                  +10m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsFinishModalOpen(false);
+                    handleExtendTimer(15);
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition active:scale-95 cursor-pointer"
+                >
+                  +15m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsFinishModalOpen(false);
+                    handleExtendTimer(25);
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition active:scale-95 cursor-pointer"
+                >
+                  +25m Keep Going
+                </button>
+              </div>
+            </div>
+
             {/* 60-Second Feynman Blurt (Option 4) */}
             <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 space-y-1.5">
               <div className="flex items-center justify-between text-xs">
@@ -2857,13 +3248,95 @@ Return JSON formatted with:
               />
             </div>
 
-            {/* Target Email Hint */}
-            {(userProfile?.email || user?.email || getActiveUserEmail()) && (
-              <div className="text-[11px] text-muted flex items-center gap-1.5 px-1">
-                <Mail className="w-3.5 h-3.5 text-primary shrink-0" />
-                <span className="truncate">Recipient: <strong className="text-primary">{userProfile?.email || user?.email || getActiveUserEmail()}</strong></span>
+            {/* Multi-Channel Session Delivery: Email AND WhatsApp Supported */}
+            <div className="p-3.5 bg-surface-raised/60 border border-theme rounded-2xl space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                  <Send className="w-3.5 h-3.5 text-primary" />
+                  <span>Session Delivery & Accountability</span>
+                </span>
+                <span className="text-[10px] font-mono text-muted font-bold">Dual Delivery Ready</span>
               </div>
-            )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {/* Email Delivery Toggle */}
+                <label className={`p-2.5 rounded-xl border transition cursor-pointer flex items-start gap-2.5 ${
+                  sendEmailOnFinish ? 'bg-primary/5 border-primary/40 text-primary' : 'bg-surface border-theme text-muted'
+                }`}>
+                  <input
+                    type="checkbox"
+                    checked={sendEmailOnFinish}
+                    onChange={(e) => setSendEmailOnFinish(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded text-primary focus:ring-primary border-theme cursor-pointer"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 font-bold text-xs">
+                      <Mail className="w-3.5 h-3.5 text-primary" />
+                      <span>Email Report</span>
+                    </div>
+                    <span className="text-[10px] text-muted block truncate mt-0.5">
+                      {userProfile?.email || user?.email || getActiveUserEmail() || 'Active Email Account'}
+                    </span>
+                  </div>
+                </label>
+
+                {/* WhatsApp Delivery Toggle */}
+                <label className={`p-2.5 rounded-xl border transition cursor-pointer flex items-start gap-2.5 ${
+                  sendWhatsAppOnFinish ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-800 dark:text-emerald-300' : 'bg-surface border-theme text-muted'
+                }`}>
+                  <input
+                    type="checkbox"
+                    checked={sendWhatsAppOnFinish}
+                    onChange={(e) => setSendWhatsAppOnFinish(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-theme cursor-pointer"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 font-bold text-xs">
+                      <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>WhatsApp Notice</span>
+                    </div>
+                    <span className="text-[10px] text-muted block truncate mt-0.5">
+                      {recipientPhoneInput ? recipientPhoneInput : 'Direct wa.me link'}
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {/* Optional WhatsApp Number Customizer */}
+              {sendWhatsAppOnFinish && (
+                <div className="flex items-center gap-2 pt-0.5">
+                  <span className="text-[11px] text-muted font-bold shrink-0">WhatsApp Number:</span>
+                  <input
+                    type="tel"
+                    value={recipientPhoneInput}
+                    onChange={(e) => setRecipientPhoneInput(e.target.value)}
+                    placeholder="e.g. +1234567890 (or blank for picker)"
+                    className="flex-1 px-2.5 py-1 text-xs rounded-lg bg-surface border border-theme text-primary placeholder-muted focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* 1-3-7 Spaced Revision Integration (Method 1) */}
+            <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-2xl space-y-2">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={addTo137OnFinish}
+                  onChange={(e) => setAddTo137OnFinish(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-theme cursor-pointer"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900 dark:text-amber-200">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>Add this topic to 1-3-7 Revision?</span>
+                  </div>
+                  <p className="text-[11px] text-muted mt-0.5 leading-relaxed">
+                    Automatically schedules <strong>Day 1</strong> (tomorrow), <strong>Day 3</strong>, and <strong>Day 7</strong> revisions linked to <em>{selectedSubjectName} → {selectedChapterName} → {selectedTopicName}</em>{selectedSloCode ? ` (${selectedSloCode})` : ''}.
+                  </p>
+                </div>
+              </label>
+            </div>
 
             {/* Revision & Progress Saving Notice */}
             <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 rounded-2xl text-xs text-emerald-900 dark:text-emerald-200 space-y-1">
@@ -2888,45 +3361,38 @@ Return JSON formatted with:
                 <span>Save & Evaluate with AI Blurt (Lock in Recall)</span>
               </button>
 
+              {/* Primary Dual / Multi-Channel Save Button */}
               <button
                 type="button"
-                onClick={() => handleSaveResult(true)}
+                onClick={() => handleSaveResult()}
                 disabled={isSendingEmail}
-                className="w-full py-2.5 px-4 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-xs disabled:opacity-50 min-h-[42px]"
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:opacity-95 text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-md disabled:opacity-50 min-h-[44px]"
               >
-                {isSendingEmail ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                <span>Save to Revision & Email Summary</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const msg = generateCompletedWorkWhatsAppMessage({
-                    studentName: userProfile?.name || 'Student',
-                    subjectName: selectedSubjectName,
-                    topicName: selectedTopicName,
-                    durationMinutes: sessionLoggedMinutes,
-                    notes: sessionNotes || feynmanBlurt,
-                    status: selectedResult,
-                  });
-                  const url = buildWhatsAppDirectUrl(userProfile?.whatsappNumber || '', msg);
-                  window.open(url, '_blank', 'noopener,noreferrer');
-                }}
-                className="w-full py-2.5 px-4 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs min-h-[42px]"
-              >
-                <MessageSquare className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                <span>Share Notice via WhatsApp 📲</span>
+                {isSendingEmail ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                <span>
+                  {sendEmailOnFinish && sendWhatsAppOnFinish
+                    ? '🚀 Save & Dispatch to Both (Email + WhatsApp)'
+                    : sendEmailOnFinish
+                    ? '📧 Save & Email Summary'
+                    : sendWhatsAppOnFinish
+                    ? '📲 Save & Send WhatsApp'
+                    : '💾 Save to Revision & Progress'}
+                </span>
               </button>
 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => handleSaveResult(false)}
+                  onClick={() => handleSaveResult({ sendEmail: false, sendWhatsApp: false })}
                   disabled={isSendingEmail}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center justify-center cursor-pointer shadow-xs min-h-[42px]"
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-surface-raised hover:bg-theme-accent border border-theme text-primary text-xs font-bold transition flex items-center justify-center cursor-pointer shadow-2xs min-h-[42px]"
                 >
-                  <Check className="w-4 h-4 mr-1.5" />
-                  <span>Save to Revision & Progress</span>
+                  <Check className="w-4 h-4 mr-1.5 text-emerald-600" />
+                  <span>Save Locally Only</span>
                 </button>
                 <button
                   type="button"

@@ -48,10 +48,25 @@ function formatDateISO(d: Date): string {
 export function fallbackParseCalendarSchedule(
   rawText: string,
   referenceDateStr?: string,
-  knownSubjects: string[] = []
+  knownSubjects: string[] = [],
+  targetEndDateStr?: string
 ): FallbackScheduleResult {
   const refDate = referenceDateStr ? new Date(referenceDateStr) : new Date();
   const validRefDate = isNaN(refDate.getTime()) ? new Date() : refDate;
+
+  // Auto-detect target end date if not explicitly passed (e.g. if text mentions December / Dec / Term 1)
+  let effectiveEndDate: Date | null = null;
+  if (targetEndDateStr) {
+    const parsedEnd = new Date(targetEndDateStr);
+    if (!isNaN(parsedEnd.getTime())) effectiveEndDate = parsedEnd;
+  }
+  
+  if (!effectiveEndDate) {
+    if (/\b(december|dec|term\s*1)\b/i.test(rawText)) {
+      const year = validRefDate.getFullYear();
+      effectiveEndDate = new Date(year, 11, 31, 23, 59, 59); // Dec 31
+    }
+  }
 
   const lines = rawText
     .split(/\r?\n|;/)
@@ -61,6 +76,11 @@ export function fallbackParseCalendarSchedule(
   const items: FallbackScheduleItem[] = [];
   let currentDate = new Date(validRefDate);
   let dayOffset = 0;
+
+  // If effectiveEndDate is known, calculate total available days to prevent spilling into future months
+  const totalAvailableDays = effectiveEndDate 
+    ? Math.max(1, Math.floor((effectiveEndDate.getTime() - validRefDate.getTime()) / (1000 * 60 * 60 * 24)))
+    : null;
 
   const commonSubjects = [
     'Physics', 'Chemistry', 'Mathematics', 'Math', 'Biology', 'History',
@@ -128,14 +148,25 @@ export function fallbackParseCalendarSchedule(
       }
     }
 
-    // 4. If no date found on this line, advance sequentially
+    // 4. If no date found on this line, advance within bounds
     if (!lineDate) {
       const d = new Date(validRefDate);
-      d.setDate(d.getDate() + dayOffset);
+      if (totalAvailableDays !== null && totalAvailableDays > 0) {
+        // Evenly pace lines across the available period so it strictly finishes on time
+        const stepOffset = Math.floor((i / Math.max(1, lines.length)) * totalAvailableDays);
+        d.setDate(d.getDate() + stepOffset);
+      } else {
+        d.setDate(d.getDate() + dayOffset);
+        dayOffset++;
+      }
       lineDate = d;
-      dayOffset++;
     } else {
       currentDate = lineDate;
+    }
+
+    // STRICT BOUNDARY CLAMP: Never allow dates to spill past effectiveEndDate (e.g., into March)
+    if (effectiveEndDate && lineDate.getTime() > effectiveEndDate.getTime()) {
+      lineDate = new Date(effectiveEndDate);
     }
 
     // 5. Extract Time Slot (e.g. 09:00 - 11:00, 2pm - 4pm, 2 hours, 60m)

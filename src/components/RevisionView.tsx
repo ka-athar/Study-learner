@@ -16,7 +16,8 @@ import {
   Calendar,
   Check,
   ChevronDown,
-  Info
+  Info,
+  Zap
 } from 'lucide-react';
 import { Subject, RevisionItem, StudySession, ActiveTab } from '../types';
 
@@ -24,10 +25,15 @@ interface RevisionViewProps {
   subjects: Subject[];
   revisions: RevisionItem[];
   sessions?: StudySession[];
-  onStartTimerForTopic: (subjectName: string, chapterName: string, topicName: string) => void;
+  onStartTimerForTopic: (subjectName: string, chapterName: string, topicName: string, durationMinutes?: number) => void;
   onMarkRevisionDone: (revisionId: string) => void;
   onDeleteRevision?: (revisionId: string) => void;
   onAddRevisionTopic?: (item: Omit<RevisionItem, 'id' | 'userId'>) => void;
+  onRescheduleRevision?: (
+    topicInfo: { id?: string; subjectName: string; topicName: string; chapterName?: string },
+    newDueDate: string,
+    notes?: string
+  ) => Promise<void> | void;
   onNavigateTab?: (tab: ActiveTab) => void;
 }
 
@@ -39,12 +45,15 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
   onMarkRevisionDone,
   onDeleteRevision,
   onAddRevisionTopic,
+  onRescheduleRevision,
   onNavigateTab
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'completed' | 'timed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSubjectFilter, setSelectedSubjectFilter] = useState('all');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [reschedulingItemId, setReschedulingItemId] = useState<string | null>(null);
+  const [customRescheduleDate, setCustomRescheduleDate] = useState<string>('');
 
   // Form state for adding custom revision topic
   const [newSubject, setNewSubject] = useState(subjects[0]?.name || '');
@@ -236,13 +245,23 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
 
         <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
           {onNavigateTab && (
-            <button
-              onClick={() => onNavigateTab('flashcards')}
-              className="px-4 py-2 bg-[#F2EFE9] hover:bg-[#EAE7DF] border border-[#E0DBD0] text-[#4A4E4D] text-xs font-semibold rounded-full transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <Brain className="w-3.5 h-3.5 text-[#6B705C]" />
-              <span>Flashcard Arena</span>
-            </button>
+            <>
+              <button
+                onClick={() => onNavigateTab('137_revision')}
+                className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-semibold rounded-full shadow-xs flex items-center gap-1.5 cursor-pointer transition active:scale-95"
+              >
+                <RotateCcw className="w-3.5 h-3.5 animate-spin-slow" />
+                <span>1-3-7 Spaced Engine</span>
+              </button>
+
+              <button
+                onClick={() => onNavigateTab('flashcards')}
+                className="px-4 py-2 bg-[#F2EFE9] hover:bg-[#EAE7DF] border border-[#E0DBD0] text-[#4A4E4D] text-xs font-semibold rounded-full transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Brain className="w-3.5 h-3.5 text-[#6B705C]" />
+                <span>Flashcard Arena</span>
+              </button>
+            </>
           )}
 
           <button
@@ -459,6 +478,27 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
                         {item.priority.toUpperCase()} PRIORITY
                       </span>
 
+                      {/* Urgency Badge */}
+                      {item.dueDate && (
+                        <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                          !isDone && item.dueDate < new Date().toISOString().split('T')[0]
+                            ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 animate-pulse'
+                            : !isDone && item.dueDate === new Date().toISOString().split('T')[0]
+                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                            : isDone
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                            : 'bg-[#F2EFE9] text-[#6B705C] border-[#E0DBD0]'
+                        }`}>
+                          {!isDone && item.dueDate < new Date().toISOString().split('T')[0]
+                            ? '🔴 Overdue'
+                            : !isDone && item.dueDate === new Date().toISOString().split('T')[0]
+                            ? '🟡 Due Today'
+                            : isDone
+                            ? '✅ Done'
+                            : '🟢 Upcoming'}
+                        </span>
+                      )}
+
                       {/* Saved Time Badge - Prominent */}
                       {item.computedMinutes > 0 ? (
                         <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1">
@@ -511,6 +551,19 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
                       <span>Start Timer</span>
                     </button>
 
+                    {/* 5m Quick Recall Button */}
+                    <button
+                      onClick={() => {
+                        onStartTimerForTopic(item.subjectName, item.chapterName || '', item.topicName, 5);
+                        if (onNavigateTab) onNavigateTab('timer');
+                      }}
+                      className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold rounded-full transition flex items-center gap-1 cursor-pointer active:scale-95 shadow-2xs"
+                      title="Launch rapid 5-minute active retrieval drill"
+                    >
+                      <Zap className="w-3.5 h-3.5 text-amber-500" />
+                      <span>5m Recall</span>
+                    </button>
+
                     {/* Cards button */}
                     {onNavigateTab && (
                       <button
@@ -520,6 +573,30 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
                       >
                         <Brain className="w-3.5 h-3.5" />
                         <span className="hidden sm:inline">Cards</span>
+                      </button>
+                    )}
+
+                    {/* Reschedule / Transfer Date Button */}
+                    {onRescheduleRevision && (
+                      <button
+                        onClick={() => {
+                          if (reschedulingItemId === item.id) {
+                            setReschedulingItemId(null);
+                          } else {
+                            setReschedulingItemId(item.id);
+                            const d = new Date();
+                            d.setDate(d.getDate() + 1);
+                            setCustomRescheduleDate(d.toISOString().split('T')[0]);
+                          }
+                        }}
+                        className={`p-2 border rounded-full transition cursor-pointer ${
+                          reschedulingItemId === item.id 
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white hover:bg-[#EAE7DF] border-[#E0DBD0] text-[#6B705C]'
+                        }`}
+                        title="Transfer / Reschedule Due Date"
+                      >
+                        <Calendar className="w-3.5 h-3.5" />
                       </button>
                     )}
 
@@ -548,6 +625,90 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
                       </button>
                     )}
                   </div>
+
+                  {/* Inline Date Transfer & Reschedule Panel */}
+                  {reschedulingItemId === item.id && onRescheduleRevision && (
+                    <div className="w-full mt-3 pt-3 border-t border-[#E0DBD0] flex flex-wrap items-center justify-between gap-2.5 bg-[#FAF8F5] p-3 rounded-2xl animate-in fade-in">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-[#6B705C]">
+                        <Calendar className="w-3.5 h-3.5" />
+                        <span>Transfer Due Date:</span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const d = new Date();
+                            d.setDate(d.getDate() + 1);
+                            const ds = d.toISOString().split('T')[0];
+                            onRescheduleRevision({ id: item.id, subjectName: item.subjectName, topicName: item.topicName, chapterName: item.chapterName }, ds);
+                            setReschedulingItemId(null);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-[#E0DBD0] text-[#6B705C] hover:bg-[#EAE7DF] font-semibold text-[11px] cursor-pointer"
+                        >
+                          Tomorrow
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const d = new Date();
+                            d.setDate(d.getDate() + 2);
+                            const ds = d.toISOString().split('T')[0];
+                            onRescheduleRevision({ id: item.id, subjectName: item.subjectName, topicName: item.topicName, chapterName: item.chapterName }, ds);
+                            setReschedulingItemId(null);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-[#E0DBD0] text-[#6B705C] hover:bg-[#EAE7DF] font-semibold text-[11px] cursor-pointer"
+                        >
+                          +2 Days
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const d = new Date();
+                            const day = d.getDay();
+                            const diff = (6 - day + 7) % 7 || 7;
+                            d.setDate(d.getDate() + diff);
+                            const ds = d.toISOString().split('T')[0];
+                            onRescheduleRevision({ id: item.id, subjectName: item.subjectName, topicName: item.topicName, chapterName: item.chapterName }, ds);
+                            setReschedulingItemId(null);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-[#E0DBD0] text-[#6B705C] hover:bg-[#EAE7DF] font-semibold text-[11px] cursor-pointer"
+                        >
+                          Weekend
+                        </button>
+
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="date"
+                            value={customRescheduleDate}
+                            onChange={(e) => setCustomRescheduleDate(e.target.value)}
+                            className="px-2 py-0.5 rounded-lg bg-white border border-[#E0DBD0] text-[#4A4E4D] font-mono text-[11px]"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (customRescheduleDate) {
+                                onRescheduleRevision({ id: item.id, subjectName: item.subjectName, topicName: item.topicName, chapterName: item.chapterName }, customRescheduleDate);
+                                setReschedulingItemId(null);
+                              }
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-[#6B705C] hover:bg-[#5a5f4e] text-white font-bold text-[11px] cursor-pointer"
+                          >
+                            Apply
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setReschedulingItemId(null)}
+                          className="p-1 text-[#A5A58D] hover:text-[#4A4E4D] cursor-pointer"
+                          title="Cancel"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -624,18 +785,47 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
                 </select>
               </div>
 
-              {/* Topic */}
+              {/* Topic - strictly only topics with actual study or revision records */}
               <div>
-                <label className="block font-bold text-[#6B705C] mb-1">Topic</label>
-                <select
-                  value={newTopic}
-                  onChange={(e) => setNewTopic(e.target.value)}
-                  className="w-full p-2.5 bg-[#F9F7F2] border border-[#E0DBD0] rounded-xl text-[#4A4E4D] focus:outline-none focus:border-[#6B705C]"
-                >
-                  {currentChapterObj?.topics.map(t => (
-                    <option key={t.id} value={t.name}>{t.name}</option>
-                  ))}
-                </select>
+                <label className="block font-bold text-[#6B705C] mb-1">Studied / Revised Topic</label>
+                {(() => {
+                  const eligibleTopics = (currentChapterObj?.topics || []).filter(t => {
+                    const hasTime = (t.timeSpentMinutes || 0) > 0;
+                    const hasLastStudied = !!t.lastStudiedAt;
+                    const isStudiedStatus = t.status === 'Completed' || t.status === 'Mastered' || t.status === 'Needs Revision' || t.status === 'In Progress';
+                    const hasSession = sessions.some(s => 
+                      s.subjectName.trim().toLowerCase() === newSubject.trim().toLowerCase() && 
+                      s.topicName.trim().toLowerCase() === t.name.trim().toLowerCase()
+                    );
+                    const hasRev = revisions.some(r => 
+                      r.subjectName.trim().toLowerCase() === newSubject.trim().toLowerCase() && 
+                      r.topicName.trim().toLowerCase() === t.name.trim().toLowerCase()
+                    );
+                    return hasTime || hasLastStudied || isStudiedStatus || hasSession || hasRev;
+                  });
+
+                  if (eligibleTopics.length === 0) {
+                    return (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs">
+                        No studied topics in this chapter yet. Topics become eligible for revision after completing a study session or timer session.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <select
+                      value={newTopic}
+                      onChange={(e) => setNewTopic(e.target.value)}
+                      className="w-full p-2.5 bg-[#F9F7F2] border border-[#E0DBD0] rounded-xl text-[#4A4E4D] focus:outline-none focus:border-[#6B705C]"
+                    >
+                      {eligibleTopics.map(t => (
+                        <option key={t.id} value={t.name}>
+                          {t.status === 'Mastered' ? '⭐ ' : t.status === 'Completed' ? '✓ ' : ''}{t.name} ({t.status})
+                        </option>
+                      ))}
+                    </select>
+                  );
+                })()}
               </div>
 
               {/* Priority */}

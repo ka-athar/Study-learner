@@ -19,9 +19,10 @@ import {
   FileText,
   Edit3,
   Printer,
-  Zap
+  Zap,
+  MessageSquare
 } from 'lucide-react';
-import { Subject, StudySession, TestResult, StudyPlan, StudyPlanTopic, TopicCompletionStatus, ActiveTab, UserProfile, Assignment } from '../types';
+import { Subject, StudySession, TestResult, StudyPlan, StudyPlanTopic, TopicCompletionStatus, ActiveTab, UserProfile, Assignment, RevisionItem } from '../types';
 import { apiGenerateStudyPlan } from '../lib/aiApi';
 import { AIScheduleImportCard } from './AIScheduleImportCard';
 import { TaskDetailModal } from './TaskDetailModal';
@@ -32,10 +33,11 @@ interface PlannerViewProps {
   testResults: TestResult[];
   plans: StudyPlan[];
   assignments?: Assignment[];
+  revisions?: RevisionItem[];
   userProfile?: UserProfile | null;
   onSavePlan: (plan: Omit<StudyPlan, 'id'>) => Promise<void> | void;
   setActiveTab: (tab: ActiveTab) => void;
-  onStartTimerForTopic: (subjectName: string, chapterName: string, topicName: string) => void;
+  onStartTimerForTopic: (subjectName: string, chapterName: string, topicName: string, durationMinutes?: number) => void;
   onTogglePlanTopic?: (planId: string, topicId: string, completed?: boolean, details?: any) => void;
   onAdjustPlanTopicDuration?: (planId: string, topicId: string, deltaMinutes: number) => void;
   onOpenEmailAgendaModal?: () => void;
@@ -48,6 +50,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
   testResults,
   plans,
   assignments = [],
+  revisions = [],
   userProfile,
   onSavePlan,
   setActiveTab,
@@ -88,6 +91,52 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
   const assignedTopics = currentPlan ? currentPlan.topics.filter(t => !t.completed) : [];
   const completedTopics = currentPlan ? currentPlan.topics.filter(t => Boolean(t.completed)) : [];
+
+  // 1-3-7 Spaced Revisions due today
+  const todayDateOnlyStr = new Date().toISOString().split('T')[0];
+  const dueRevisionsToday = useMemo(() => {
+    return (revisions || []).filter(r => !r.completed && r.dueDate === todayDateOnlyStr);
+  }, [revisions, todayDateOnlyStr]);
+
+  const handleSharePlanWhatsApp = (targetPlan?: StudyPlan | null) => {
+    const planToShare = targetPlan || currentPlan;
+    if (!planToShare) {
+      alert("No active study plan found to share. Please generate or select a plan first!");
+      return;
+    }
+
+    const lines: string[] = [];
+    lines.push(`📅 *StudyFlow Plan: ${planToShare.title}*`);
+    lines.push(`🎯 *Date:* ${planToShare.date || todayDateOnlyStr}`);
+    if (planToShare.availableHours) lines.push(`⏱️ *Target Focus:* ${planToShare.availableHours} hours`);
+    lines.push('');
+    lines.push(`📋 *Assigned Tasks & Focus Agendas:*`);
+    (planToShare.topics || []).forEach((t, i) => {
+      const status = t.completed ? '✅' : '⏳';
+      lines.push(`${status} ${i + 1}. *${t.topicName}* (${t.subjectName}) - ${t.durationMinutes || (t as any).estimatedMinutes || 30}m`);
+    });
+
+    if (planToShare.reasoning) {
+      lines.push('');
+      lines.push(`💡 *Goal:* ${planToShare.reasoning.slice(0, 140)}...`);
+    }
+
+    if (dueRevisionsToday.length > 0) {
+      lines.push('');
+      lines.push(`🔄 *1-3-7 Spaced Revisions Due Today (${dueRevisionsToday.length}):*`);
+      dueRevisionsToday.slice(0, 5).forEach((r) => {
+        lines.push(`• ${r.topicName} (${r.subjectName})`);
+      });
+      if (dueRevisionsToday.length > 5) {
+        lines.push(`• +${dueRevisionsToday.length - 5} more revision tasks`);
+      }
+    }
+
+    lines.push('');
+    lines.push(`_Shared via StudyFlow Workspace_`);
+    const encoded = encodeURIComponent(lines.join('\n'));
+    window.open(`https://api.whatsapp.com/send?text=${encoded}`, '_blank');
+  };
 
   const presetQuestions = [
     "What should I study today?",
@@ -163,6 +212,15 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
+            onClick={() => setActiveTab('137_revision')}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold transition shadow-2xs cursor-pointer"
+            title="Open 1-3-7 Spaced Revision System"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-indigo-600 animate-spin-slow" />
+            <span>1-3-7 Revisions</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('assignments')}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-white hover:bg-[#F2EFE9] text-[#6B705C] border border-[#E0DBD0] text-xs font-semibold transition shadow-2xs cursor-pointer"
             title="View Assignment & Deadline Manager"
@@ -181,6 +239,16 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               <span>Email Schedule</span>
             </button>
           )}
+
+          {/* Share to WhatsApp Button */}
+          <button
+            onClick={() => handleSharePlanWhatsApp()}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition shadow-2xs cursor-pointer"
+            title="Share active study plan and agenda via WhatsApp"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Share WhatsApp</span>
+          </button>
 
           {/* Mode Switcher */}
           <div className="flex rounded-2xl bg-[#F9F7F2] p-1 border border-[#E0DBD0] text-xs">
@@ -210,6 +278,35 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 1-3-7 Spaced Revisions Due Today Banner */}
+      {dueRevisionsToday.length > 0 && (
+        <div className="p-4 rounded-3xl bg-indigo-500/10 border border-indigo-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+              <RotateCcw className="w-5 h-5 animate-spin-slow" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-primary flex items-center gap-2">
+                <span>{dueRevisionsToday.length} Spaced Revision{dueRevisionsToday.length > 1 ? 's' : ''} Due Today (1-3-7 Cycle)</span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold">
+                  Active Recall Priority
+                </span>
+              </div>
+              <p className="text-[11px] text-muted mt-0.5">
+                Keep your retention streak alive by reviewing today's scheduled 1-3-7 milestones.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setActiveTab('137_revision')}
+            className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs active:scale-95"
+          >
+            <span>Review Revisions</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* MODE 1: AI CALENDAR / WEEKLY SCHEDULE IMPORT */}
       {plannerMode === 'import' && (
@@ -421,7 +518,17 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Share Current Plan to WhatsApp */}
+                  <button
+                    onClick={() => handleSharePlanWhatsApp(currentPlan)}
+                    className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer transition shadow-2xs"
+                    title="Share this study plan to WhatsApp"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>WhatsApp Agenda</span>
+                  </button>
+
                   {onOpenPrintKit && (
                     <button
                       onClick={onOpenPrintKit}

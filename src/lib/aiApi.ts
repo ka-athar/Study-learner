@@ -65,6 +65,7 @@ export async function apiParseCalendarSchedule(params: {
   knownSubjects?: string[];
   startDate?: string;
   referenceDate?: string;
+  targetEndDate?: string;
   targetExam?: string;
   targetHorizon?: 'week' | 'month' | 'multi_month' | 'auto';
   userPreferences?: any;
@@ -84,6 +85,7 @@ export async function apiParseCalendarSchedule(params: {
         knownSubjects: subjects,
         startDate: refDate,
         referenceDate: refDate,
+        targetEndDate: params.targetEndDate,
         targetExam: params.targetExam,
         targetHorizon: params.targetHorizon,
         userPreferences: params.userPreferences
@@ -101,7 +103,7 @@ export async function apiParseCalendarSchedule(params: {
   }
 
   // Fallback to local intelligent schedule parser
-  const fallbackSchedule = fallbackParseCalendarSchedule(inputText, refDate, subjects);
+  const fallbackSchedule = fallbackParseCalendarSchedule(inputText, refDate, subjects, params.targetEndDate);
   return {
     success: true,
     schedule: fallbackSchedule,
@@ -424,6 +426,49 @@ export async function apiGenerateCheatSheet(params: {
   }
   return await response.json();
 }
+
+export async function apiGenerateWeeklyRetrospectiveSummary(params: {
+  weekLabel?: string;
+  startDate?: string;
+  endDate?: string;
+  sessions?: any[];
+  testResults?: any[];
+  revisions?: any[];
+  subjects?: any[];
+  mistakes?: any[];
+  userProfile?: any;
+  studyHabits?: any;
+}) {
+  const response = await fetch('/api/ai/weekly-retrospective-summary', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to generate weekly retrospective summary');
+  }
+  return await response.json();
+}
+
+export async function apiEvaluateFeynmanExplanation(params: {
+  subjectName: string;
+  topicName: string;
+  chapterName?: string;
+  spokenTranscript: string;
+}) {
+  const response = await fetch('/api/ai/evaluate-feynman-explanation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to evaluate Feynman verbal explanation');
+  }
+  return await response.json();
+}
+
 
 
 

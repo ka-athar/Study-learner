@@ -746,6 +746,171 @@ STUDENT MEMORY & WEAKNESS CONTEXT:
   }
 });
 
+// 5b. AI WEEKLY RETROSPECTIVE & REMEDIATION SUMMARY API (Mastered vs Weak Areas, Prompts, Audio Scripts)
+app.post('/api/ai/weekly-retrospective-summary', async (req, res) => {
+  try {
+    const { 
+      weekLabel, 
+      startDate, 
+      endDate, 
+      sessions = [], 
+      testResults = [], 
+      revisions = [], 
+      subjects = [], 
+      mistakes = [], 
+      userProfile, 
+      studyHabits = {} 
+    } = req.body;
+    const ai = getGeminiClient();
+
+    const systemInstruction = `
+You are an elite academic diagnostic strategist, neuro-learning specialist, and empathetic exam coach.
+Analyze the student's actual study logs, completed sessions, test scores, mistake records, and 1-3-7 revision statuses for the specified week (${startDate || ''} to ${endDate || ''}).
+
+Synthesize an actionable, high-impact weekly retrospective containing:
+1. "overview":
+   - "headline": Short motivating headline summarizing their week (e.g. "Solid Consistency in Chemistry, Action Needed on Circular Motion").
+   - "totalStudyMinutes": Total calculated study minutes across sessions.
+   - "masteredCount": Number of topics mastered this week.
+   - "weakCount": Number of topics needing immediate review.
+   - "executiveSummary": A 2-3 paragraph insightful breakdown of what went well, what slipped, and their learning cadence.
+
+2. "masteredTopics": Array of topics where the student demonstrated high competence (high test score >= 75%, completed Day 7 revision, or substantial focused study with positive outcome):
+   - "subjectName": string
+   - "topicName": string
+   - "masteryReason": string explaining why it's mastered
+   - "masteryBadge": short badge title (e.g., "Retention Champ", "High Accuracy", "Deep Focus")
+
+3. "weakTopics": Array of topics where the student made mistakes, scored low (< 70%), is overdue in 1-3-7, or logged difficulties:
+   - "subjectName": string
+   - "chapterName": string
+   - "topicName": string
+   - "issueType": "conceptual_gap" | "formula_confusion" | "retention_fade" | "exam_trap"
+   - "severity": "critical" | "moderate" | "minor"
+   - "diagnosticReason": Exact reason why this topic struggled
+   - "keyConceptToReview": The exact definition, law, or rule to memorize
+   - "remediation":
+     - "flashcardFront": Direct question/prompt for an active recall card
+     - "flashcardBack": Accurate, concise answer/formula
+     - "diagnosticQuestion": A conceptual check question to test them immediately
+     - "modelAnswer": Expected accurate answer for the test
+
+4. "universalPrompts": (Ready to paste into external AIs like ChatGPT, Claude, Gemini, or DeepSeek)
+   - "chatGptDeepSeekPrompt": A rich, comprehensive prompt containing their exact weak topics, asking the AI to act as a strict board examiner, drill them on traps, and provide step-by-step mnemonics.
+   - "examinerSocraticPrompt": A prompt instructing an AI to conduct a 1-question-at-a-time verbal Socratic exam on these specific weak topics.
+   - "notebookLmAudioScript": A realistic, engaging 2-speaker podcast dialogue (Speaker A: Host, Speaker B: Academic Coach) discussing the student's week, celebrating the mastered topics, and explaining the weak topics with vivid everyday analogies.
+
+5. "audioVoiceSummary": A concise 60-90 second verbal script written in first/second person, perfect for playing aloud via Text-to-Speech inside the app to debrief the student.
+
+6. "nextWeekGameplan": Array of 4-5 concrete, high-priority action items for the upcoming week.
+
+Return ONLY valid JSON matching this schema without markdown fences.
+`;
+
+    const userContent = `
+WEEKLY STUDY LOGS & CONTEXT:
+- Week: ${weekLabel || 'Past 7 Days'} (${startDate || ''} to ${endDate || ''})
+- Student Target Hours/Day: ${userProfile?.targetHoursPerDay || 3}
+- Examination Goal: ${userProfile?.examGoal || 'Board / College Entrance Exam'}
+
+STUDY SESSIONS LOGGED (Duration, topics covered, results):
+${JSON.stringify(sessions || [], null, 2)}
+
+TEST SCORES & INCORRECT QUESTIONS:
+${JSON.stringify(testResults || [], null, 2)}
+
+1-3-7 REVISIONS & COMPLETED STAGES:
+${JSON.stringify(revisions || [], null, 2)}
+
+MISTAKE BANK ENTRIES:
+${JSON.stringify(mistakes || [], null, 2)}
+
+STUDY HABITS DATA:
+${JSON.stringify(studyHabits || {}, null, 2)}
+`;
+
+    const response = await generateContentWithFallback(ai, {
+      contents: userContent,
+      config: {
+        systemInstruction,
+        temperature: 0.35,
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const summaryData = parseCleanJson(response.text);
+    res.json({ success: true, summary: summaryData });
+  } catch (error: any) {
+    console.error('Error in /api/ai/weekly-retrospective-summary:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate weekly summary' });
+  }
+});
+
+// 5c. SOCRATIC FEYNMAN AUDIO / VERBAL CHECK EVALUATION API (Option D)
+app.post('/api/ai/evaluate-feynman-explanation', async (req, res) => {
+  try {
+    const { subjectName, topicName, chapterName, spokenTranscript } = req.body;
+    const ai = getGeminiClient();
+
+    const systemInstruction = `
+You are Richard Feynman and an expert board examiner combined.
+Evaluate a student's spoken/verbal explanation of an academic topic (${subjectName} - ${topicName}).
+The student explained the concept in their own words aloud.
+
+Analyze the transcript for:
+1. Conceptual accuracy & depth.
+2. Core scientific/mathematical terminology and laws included.
+3. Essential definitions, formulas, conditions, or derivation steps OMITTED.
+4. Misconceptions or inaccuracies in their thinking.
+
+Return ONLY valid JSON matching this structure without Markdown:
+{
+  "score": 85,
+  "grade": "A" | "B" | "C" | "Needs Improvement",
+  "overallVerdict": "Encouraging, constructive feedback on their verbal delivery and grasp.",
+  "coveredAccurately": [
+    "Concepts they explained clearly and correctly..."
+  ],
+  "missingKeywordsAndFormulas": [
+    "Key term, formula, or law they forgot to mention..."
+  ],
+  "misconceptionsIdentified": [
+    {
+      "studentClaim": "What student said...",
+      "correction": "Why it's slightly inaccurate and what the correct rule is."
+    }
+  ],
+  "feynmanAnalogyModel": "A brilliant 2-3 sentence simple explanation with an everyday analogy that seals the concept in memory."
+}
+`;
+
+    const userContent = `
+TOPIC TO EVALUATE:
+- Subject: ${subjectName}
+- Chapter: ${chapterName || ''}
+- Topic: ${topicName}
+
+STUDENT'S SPOKEN EXPLANATION TRANSCRIPT:
+"${spokenTranscript || ''}"
+`;
+
+    const response = await generateContentWithFallback(ai, {
+      contents: userContent,
+      config: {
+        systemInstruction,
+        temperature: 0.3,
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const evaluation = parseCleanJson(response.text);
+    res.json({ success: true, evaluation });
+  } catch (error: any) {
+    console.error('Error in /api/ai/evaluate-feynman-explanation:', error);
+    res.status(500).json({ error: error.message || 'Failed to evaluate verbal explanation' });
+  }
+});
+
 // 6. AI CALENDAR & MULTI-PERIOD SCHEDULE PARSER
 app.post('/api/ai/parse-calendar-schedule', async (req, res) => {
   try {
@@ -754,6 +919,7 @@ app.post('/api/ai/parse-calendar-schedule', async (req, res) => {
       pastedScheduleText, 
       referenceDate,
       startDate, 
+      targetEndDate,
       knownSubjects = [],
       syllabus = [], 
       targetHorizon = 'auto', // 'week' | 'month' | 'multi_month' | 'auto'
@@ -775,15 +941,20 @@ You are an expert academic calendar and study schedule analyzer.
 Your job is to read raw, unstructured or structured schedule/calendar text (e.g. natural language, timetables, syllabus date sheets, class schedules, exam dates, multi-week study sprints, or monthly calendars) and convert it into a structured, daily-actionable academic calendar.
 
 CURRENT REFERENCE DATE: "${today}" (Use this to resolve relative days like "today", "tomorrow", "this Monday", "next Friday", "Week 1 Day 2", "Aug 25", or unstated years).
+${targetEndDate ? `TARGET COMPLETION / EXAM END DATE: "${targetEndDate}"` : ''}
 
 KNOWN SUBJECTS in the student's curriculum:
 ${JSON.stringify(subjectList)}
 ${targetExam ? `TARGET EXAM / GOAL: "${targetExam}"` : ''}
 
+CRITICAL TIMELINE BOUNDARY ENFORCEMENT:
+1. STRICT BOUNDARY: ${targetEndDate ? `All scheduled study items MUST be dated on or before "${targetEndDate}". Absolutely NEVER generate or extend dates past "${targetEndDate}" (e.g. do NOT spill into future months like January, February, or March)!` : 'Detect and strictly respect the end boundary mentioned in the text. If the syllabus is up to December, ALL items MUST conclude by December 31. Absolutely DO NOT spill over into January, February, or March!'}
+2. PACING: If the syllabus contains many topics within the target timeline (e.g. September to December), allocate 2 to 3 topics per study day or schedule weekend reviews so 100% of the syllabus finishes strictly within the target timeframe.
+
 INSTRUCTIONS:
 1. Extract ALL specific dates and study events mentioned or implied across the entire week, month, or multi-month period.
 2. For each scheduled event:
-   - "date": Exact ISO date format "YYYY-MM-DD".
+   - "date": Exact ISO date format "YYYY-MM-DD". Never generate dates past the target completion boundary.
    - "dayLabel": e.g. "Monday", "Wednesday, Aug 19".
    - "timeSlot": e.g. "09:00 - 11:00", "14:00 - 16:30", "Morning", or "10:00 AM".
    - "subjectName": Academic subject name (match known subjects if relevant, or infer).
@@ -845,12 +1016,46 @@ ${rawScheduleText}
       parsedSchedule = parseCleanJson(response.text);
     } catch (aiErr: any) {
       console.warn('Gemini calendar schedule parsing failed, using resilient fallback parser:', aiErr?.message);
-      parsedSchedule = fallbackParseCalendarSchedule(rawScheduleText, today, subjectList);
+      parsedSchedule = fallbackParseCalendarSchedule(rawScheduleText, today, subjectList, targetEndDate);
     }
 
     if (!parsedSchedule || !parsedSchedule.scheduledItems) {
-      parsedSchedule = fallbackParseCalendarSchedule(rawScheduleText, today, subjectList);
+      parsedSchedule = fallbackParseCalendarSchedule(rawScheduleText, today, subjectList, targetEndDate);
     }
+
+    // STRICT BOUNDARY POST-PROCESSING:
+    // If targetEndDate is specified or December boundary detected, ensure NO date spills past it (e.g. into March).
+    const effectiveEnd = targetEndDate || (/\b(december|dec|term\s*1)\b/i.test(rawScheduleText) ? `${today.slice(0, 4)}-12-31` : null);
+    
+    let rawItems: any[] = parsedSchedule.scheduledItems || [];
+    if (effectiveEnd && rawItems.length > 0) {
+      const todayDate = new Date(today);
+      const endDate = new Date(effectiveEnd);
+      const totalAvailableDays = Math.max(1, Math.floor((endDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24)));
+
+      const hasOvershoot = rawItems.some(it => it.date && it.date > effectiveEnd);
+      if (hasOvershoot) {
+        // Proportionally scale and distribute items so 100% fit comfortably before effectiveEnd
+        rawItems = rawItems.map((item, idx) => {
+          if (!item.date || item.date > effectiveEnd) {
+            const step = Math.floor((idx / Math.max(1, rawItems.length)) * totalAvailableDays);
+            const pacedDate = new Date(todayDate);
+            pacedDate.setDate(todayDate.getDate() + step);
+            const dateStr = pacedDate.toISOString().split('T')[0];
+            return {
+              ...item,
+              date: dateStr,
+              monthKey: dateStr.slice(0, 7),
+              dayLabel: pacedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+            };
+          }
+          return item;
+        });
+      }
+    }
+
+    parsedSchedule.scheduledItems = rawItems;
+    parsedSchedule.monthsCovered = Array.from(new Set(rawItems.map(i => i.monthKey || i.date?.slice(0, 7)))).filter(Boolean);
 
     const tasks = parsedSchedule.scheduledItems || [];
 

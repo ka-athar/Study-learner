@@ -152,6 +152,10 @@ export const AICalendarScheduleImporter: React.FC<AICalendarScheduleImporterProp
   const [isOpen, setIsOpen] = useState<boolean>(initialOpen);
   const [inputText, setInputText] = useState<string>('');
   const [targetHorizon, setTargetHorizon] = useState<'auto' | 'week' | 'month' | 'multi_month'>('auto');
+  const [deadlineBoundary, setDeadlineBoundary] = useState<string>(() => {
+    const year = new Date().getFullYear();
+    return `${year}-12-31`;
+  });
   
   // AI analysis status
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
@@ -177,9 +181,15 @@ export const AICalendarScheduleImporter: React.FC<AICalendarScheduleImporterProp
 
     try {
       const todayStr = new Date().toISOString().split('T')[0];
+      const todayDate = new Date(todayStr);
+      const targetEndDate = deadlineBoundary || '2026-12-31';
+      const endDate = new Date(targetEndDate);
+      const totalAvailableDays = Math.max(1, Math.floor((endDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24)));
+
       const res = await apiParseCalendarSchedule({
         text: inputText,
         referenceDate: todayStr,
+        targetEndDate: targetEndDate,
         knownSubjects: subjects.map(s => s.name),
         targetHorizon
       });
@@ -189,13 +199,27 @@ export const AICalendarScheduleImporter: React.FC<AICalendarScheduleImporterProp
       }
 
       const scheduleData: ParsedScheduleResult = res.schedule;
-      // Attach IDs and default selected = true
-      const itemsWithIds: ParsedScheduleItem[] = (scheduleData.scheduledItems || []).map((item, idx) => ({
-        ...item,
-        id: `item-${Date.now()}-${idx}`,
-        selected: true,
-        monthKey: item.monthKey || (item.date ? item.date.slice(0, 7) : todayStr.slice(0, 7))
-      }));
+      const rawList: any[] = scheduleData.scheduledItems || [];
+
+      // STRICT PACING & BOUNDARY CLAMP:
+      // If any item exceeds deadlineBoundary, proportionally space items across the available timeline
+      const exceedsBoundary = rawList.some(it => it.date && it.date > targetEndDate);
+      const itemsWithIds: ParsedScheduleItem[] = rawList.map((item, idx) => {
+        let finalDate = item.date;
+        if (exceedsBoundary || !finalDate || finalDate > targetEndDate) {
+          const step = Math.floor((idx / Math.max(1, rawList.length)) * totalAvailableDays);
+          const pacedD = new Date(todayDate);
+          pacedD.setDate(todayDate.getDate() + step);
+          finalDate = pacedD.toISOString().split('T')[0];
+        }
+        return {
+          ...item,
+          date: finalDate,
+          id: `item-${Date.now()}-${idx}`,
+          selected: true,
+          monthKey: item.monthKey || finalDate.slice(0, 7)
+        };
+      });
 
       const finalResult: ParsedScheduleResult = {
         ...scheduleData,
@@ -450,6 +474,85 @@ export const AICalendarScheduleImporter: React.FC<AICalendarScheduleImporterProp
                     <div className="text-[10px] text-[#A5A58D] line-clamp-1">{tmpl.desc}</div>
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* Syllabus & Calendar Boundary Appraiser */}
+            <div className="p-4 rounded-2xl bg-[#F9F7F2] border border-[#E0DBD0] space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E0DBD0]/60 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-[#6B705C]" />
+                  <span className="text-xs font-bold text-[#4A4E4D]">
+                    Syllabus & Calendar Boundary Appraiser
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 font-bold border border-emerald-500/30">
+                    Bounded & Anti-Spill
+                  </span>
+                </div>
+                <div className="text-[11px] text-[#A5A58D]">
+                  Target Completion Deadline: <strong className="text-[#4A4E4D] font-mono">{deadlineBoundary}</strong>
+                </div>
+              </div>
+
+              {/* Deadline Preset Pills */}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-[11px] text-[#A5A58D] font-medium">Bound Timeline To:</span>
+                {[
+                  { label: 'Strict Dec 31 (Term 1)', date: '2026-12-31' },
+                  { label: 'Dec 15 (Pre-Exams)', date: '2026-12-15' },
+                  { label: 'Nov 30 (November Sprint)', date: '2026-11-30' },
+                ].map((preset) => (
+                  <button
+                    key={preset.date}
+                    type="button"
+                    onClick={() => setDeadlineBoundary(preset.date)}
+                    className={`px-3 py-1 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                      deadlineBoundary === preset.date
+                        ? 'bg-[#6B705C] text-white shadow-2xs'
+                        : 'bg-white text-[#4A4E4D] border border-[#E0DBD0] hover:bg-[#E0DBD0]/40'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+
+                <div className="flex items-center gap-1.5 ml-auto">
+                  <span className="text-[11px] text-[#A5A58D]">Custom End:</span>
+                  <input
+                    type="date"
+                    value={deadlineBoundary}
+                    onChange={(e) => setDeadlineBoundary(e.target.value)}
+                    className="px-2.5 py-1 rounded-xl bg-white border border-[#E0DBD0] text-xs font-mono text-[#4A4E4D] focus:outline-none focus:border-[#6B705C]"
+                  />
+                </div>
+              </div>
+
+              {/* Real-time Workload & Pacing Appraisal Stats */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-center">
+                <div className="p-2 rounded-xl bg-white border border-[#E0DBD0]">
+                  <span className="text-[10px] text-[#A5A58D] uppercase font-bold block">Available Time</span>
+                  <span className="text-xs font-bold font-mono text-[#4A4E4D]">
+                    {Math.max(1, Math.floor((new Date(deadlineBoundary).getTime() - new Date().getTime()) / 86400000))} Days
+                  </span>
+                </div>
+                <div className="p-2 rounded-xl bg-white border border-[#E0DBD0]">
+                  <span className="text-[10px] text-[#A5A58D] uppercase font-bold block">Curriculum Size</span>
+                  <span className="text-xs font-bold font-mono text-[#4A4E4D]">
+                    {subjects.reduce((acc, s) => acc + s.chapters.reduce((ca, c) => ca + c.topics.length, 0), 0)} Topics
+                  </span>
+                </div>
+                <div className="p-2 rounded-xl bg-white border border-[#E0DBD0]">
+                  <span className="text-[10px] text-[#A5A58D] uppercase font-bold block">Target Pacing</span>
+                  <span className="text-xs font-bold font-mono text-[#6B705C]">
+                    {(subjects.reduce((acc, s) => acc + s.chapters.reduce((ca, c) => ca + c.topics.length, 0), 0) / Math.max(1, Math.floor((new Date(deadlineBoundary).getTime() - new Date().getTime()) / (86400000 * 7)))).toFixed(1)} Topics/Wk
+                  </span>
+                </div>
+                <div className="p-2 rounded-xl bg-white border border-[#E0DBD0]">
+                  <span className="text-[10px] text-[#A5A58D] uppercase font-bold block">Spillover Guard</span>
+                  <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                    Zero Spill to March
+                  </span>
+                </div>
               </div>
             </div>
 

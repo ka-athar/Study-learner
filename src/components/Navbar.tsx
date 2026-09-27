@@ -53,6 +53,7 @@ import { ActiveTab, UserProfile, ThemeConfig } from '../types';
 import { subscribeSyncStatus, SyncStatusInfo } from '../lib/db';
 import { THEME_PALETTES } from '../lib/themeService';
 import { PWAInstallButton } from './PWAInstallButton';
+import { ConnectionStatusPill } from './ConnectionStatusPill';
 
 interface NavbarProps {
   activeTab: ActiveTab;
@@ -78,6 +79,7 @@ interface NavbarProps {
   onOpenWorkspaceHub?: (tab?: 'classroom' | 'docs' | 'meet' | 'tasks' | 'calendar' | 'drive' | 'keep') => void;
   onOpenMaterialImport?: () => void;
   onOpenDeviceSync?: () => void;
+  onOpenDeviceTransfer?: () => void;
   onOpenQRScanner?: () => void;
   onOpenPrintKit?: () => void;
   onOpenAudioStudy?: () => void;
@@ -112,6 +114,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenWorkspaceHub,
   onOpenMaterialImport,
   onOpenDeviceSync,
+  onOpenDeviceTransfer,
   onOpenQRScanner,
   onOpenPrintKit,
   onOpenAudioStudy,
@@ -178,7 +181,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   }[] = [
     // Core
     { id: 'dashboard', label: 'Dashboard', icon: <Layers className="w-4 h-4" />, category: 'core' },
+    { id: 'study_habits', label: 'Study Habits & Progress', icon: <CheckSquare className="w-4 h-4 text-emerald-500" />, category: 'core', badge: 'HABITS' },
     { id: 'syllabus', label: 'Syllabus', icon: <BookOpen className="w-4 h-4" />, category: 'core' },
+    { id: '137_revision', label: '1-3-7 Revision', icon: <RotateCcw className="w-4 h-4 text-indigo-500 animate-spin-slow" />, category: 'core', badge: '1-3-7' },
     { id: 'planner', label: 'AI Planner', icon: <Sparkles className="w-4 h-4" />, category: 'core' },
     { id: 'timer', label: 'Timer', icon: <Clock className="w-4 h-4" />, category: 'core' },
     { id: 'calendar', label: 'Calendar', icon: <Calendar className="w-4 h-4" />, category: 'core' },
@@ -256,6 +261,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               </kbd>
             </button>
           )}
+
+          {/* Live Device Connection Status Area (CONNECTED • iPad • Last sync / NOT CONNECTED) */}
+          <ConnectionStatusPill
+            onOpenConnectModal={() => {
+              if (onOpenDeviceTransfer) onOpenDeviceTransfer();
+              else if (onOpenDeviceSync) onOpenDeviceSync();
+            }}
+            onSyncNow={onForceSaveCloud}
+            isSyncing={syncInfo.state === 'saving'}
+          />
 
           {/* Cloud / Dual-Layer Save Status Indicator */}
           <button

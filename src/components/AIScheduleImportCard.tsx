@@ -132,6 +132,7 @@ export const AIScheduleImportCard: React.FC<AIScheduleImportCardProps> = ({
 }) => {
   const [scheduleText, setScheduleText] = useState('');
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(`${new Date().getFullYear()}-12-31`);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysisSummary, setAnalysisSummary] = useState<string | null>(null);
@@ -156,6 +157,7 @@ export const AIScheduleImportCard: React.FC<AIScheduleImportCardProps> = ({
         pastedScheduleText: scheduleText,
         syllabus: subjects,
         startDate: startDate,
+        targetEndDate: endDate,
         targetExam: userProfile?.examDates?.[0]?.examName || 'Academic Exam Prep'
       });
 
@@ -299,16 +301,36 @@ export const AIScheduleImportCard: React.FC<AIScheduleImportCardProps> = ({
           </div>
         </div>
 
-        {/* Reference Start Date */}
-        <div className="flex items-center gap-2 bg-[#F9F7F2] p-2 rounded-2xl border border-[#E0DBD0] shrink-0">
-          <Calendar className="w-3.5 h-3.5 text-[#6B705C]" />
-          <span className="text-[11px] font-bold text-[#6B705C] whitespace-nowrap">Start Date:</span>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="text-xs font-mono font-bold bg-white border border-[#E0DBD0] rounded-xl px-2 py-1 text-[#4A4E4D] focus:outline-hidden focus:ring-1 focus:ring-[#6B705C]"
-          />
+        {/* Date Boundaries: Start Date and Target Finish Date */}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 bg-[#F9F7F2] p-2 rounded-2xl border border-[#E0DBD0]">
+            <Calendar className="w-3.5 h-3.5 text-[#6B705C]" />
+            <span className="text-[11px] font-bold text-[#6B705C] whitespace-nowrap">Start:</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="text-xs font-mono font-bold bg-white border border-[#E0DBD0] rounded-xl px-2 py-1 text-[#4A4E4D] focus:outline-hidden focus:ring-1 focus:ring-[#6B705C]"
+            />
+          </div>
+
+          <div className="flex items-center gap-2 bg-[#F9F7F2] p-2 rounded-2xl border border-indigo-200">
+            <span className="text-[11px] font-bold text-indigo-700 whitespace-nowrap">Target Finish:</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="text-xs font-mono font-bold bg-white border border-indigo-200 rounded-xl px-2 py-1 text-[#4A4E4D] focus:outline-hidden focus:ring-1 focus:ring-indigo-600"
+            />
+            <button
+              type="button"
+              onClick={() => setEndDate(`${new Date().getFullYear()}-12-31`)}
+              className="text-[10px] font-bold px-2 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 cursor-pointer"
+              title="Lock boundary to December 31"
+            >
+              Dec 31
+            </button>
+          </div>
         </div>
       </div>
 
@@ -353,12 +375,17 @@ export const AIScheduleImportCard: React.FC<AIScheduleImportCardProps> = ({
             <span>Paste Calendar / Weekly Schedule Text:</span>
           </label>
           {scheduleText && (
-            <button
-              onClick={() => setScheduleText('')}
-              className="text-[10px] text-[#A5A58D] hover:text-rose-600 font-semibold"
-            >
-              Clear Text
-            </button>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-mono text-muted">
+                {scheduleText.length.toLocaleString()} chars • ~{scheduleText.split('\n').length} lines
+              </span>
+              <button
+                onClick={() => setScheduleText('')}
+                className="text-[10px] text-[#A5A58D] hover:text-rose-600 font-semibold cursor-pointer"
+              >
+                Clear Text
+              </button>
+            </div>
           )}
         </div>
 
@@ -366,9 +393,10 @@ export const AIScheduleImportCard: React.FC<AIScheduleImportCardProps> = ({
           <textarea
             value={scheduleText}
             onChange={(e) => setScheduleText(e.target.value)}
-            rows={7}
-            placeholder={`Paste your timetable or calendar schedule here...\n\nExample:\nMonday:\n- 09:00 AM - 11:00 AM: Physics Mechanics (Newton's Laws & Friction)\n- 03:00 PM - 05:00 PM: Chemistry Chemical Bonding\n\nTuesday:\n- 10:00 AM - 12:30 PM: Math Calculus Integration`}
-            className="w-full p-4 bg-[#F9F7F2] border border-[#E0DBD0] rounded-2xl text-xs text-[#4A4E4D] placeholder-[#A5A58D] font-mono leading-relaxed focus:outline-hidden focus:ring-2 focus:ring-[#6B705C] transition"
+            rows={10}
+            maxLength={100000}
+            placeholder={`Paste your timetable, semester syllabus, or multi-week/multi-month schedule here (supports large pastes up to 100,000 characters)...\n\nExample:\nWeek 1 - Monday:\n- 09:00 AM - 11:00 AM: Physics Mechanics (Newton's Laws & Friction - SLO: Newton Second Law)\n- 03:00 PM - 05:00 PM: Chemistry Chemical Bonding\n\nWeek 1 - Tuesday:\n- 10:00 AM - 12:30 PM: Math Calculus Integration`}
+            className="w-full p-4 bg-[#F9F7F2] border border-[#E0DBD0] rounded-2xl text-xs text-[#4A4E4D] placeholder-[#A5A58D] font-mono leading-relaxed focus:outline-hidden focus:ring-2 focus:ring-[#6B705C] transition min-h-[180px]"
           />
         </div>
       </div>

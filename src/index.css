@@ -256,3 +256,16 @@
   letter-spacing: 0.02em;
 }
 
+/* Vintage Calligraphic & Cursive Numerals Typography */
+.font-calligraphic {
+  font-family: 'Cormorant Garamond', 'Playfair Display', Georgia, serif;
+  font-style: italic;
+  font-feature-settings: "onum" 1, "pnum" 1, "swsh" 1;
+}
+
+.font-vintage-cursive {
+  font-family: 'Pinyon Script', 'Alex Brush', 'Cormorant Garamond', cursive;
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+

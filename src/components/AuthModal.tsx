@@ -139,11 +139,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onEmailCh
           <button
             type="button"
             onClick={() => { setAuthTab('account'); setError(''); setSuccessMsg(''); }}
-            className={`flex-1 py-1.5 rounded-lg transition cursor-pointer ${
+            className={`flex-1 py-1.5 rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
               authTab === 'account' ? 'bg-surface text-primary shadow-xs' : 'text-muted hover:text-primary'
             }`}
           >
-            Google / Password
+            <Lock className="w-3.5 h-3.5 text-primary" />
+            <span>Built-In In-App Login</span>
           </button>
           <button
             type="button"
@@ -153,7 +154,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onEmailCh
             }`}
           >
             <Smartphone className="w-3.5 h-3.5" />
-            <span>Connect by Email</span>
+            <span>Instant Email Sync</span>
           </button>
         </div>
 
@@ -168,7 +169,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onEmailCh
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:opacity-90 transition"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open in New Tab to Link Google</span>
+                <span>Open in New Tab</span>
               </a>
             )}
           </div>
@@ -187,10 +188,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onEmailCh
             <div className="p-3.5 rounded-xl bg-theme-accent/60 border border-theme space-y-2 text-xs">
               <div className="font-semibold text-primary flex items-center gap-2">
                 <Laptop className="w-4 h-4 text-emerald-500" />
-                <span>Same Email = Same Data Across Devices</span>
+                <span>Zero Pop-ups: 100% In-App Cross-Device Sync</span>
               </div>
               <p className="text-muted text-[11px] leading-relaxed">
-                Enter your student email below. Any phone, iPad, or computer using this same email address will instantly load and sync all your study materials in real-time.
+                Works natively on iPad, Safari, and iPhone without opening external tabs or switching apps. Enter your study email to pair this device instantly.
               </p>
             </div>
 
@@ -213,50 +214,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onEmailCh
               type="submit"
               className="w-full py-2.5 px-4 bg-[#6B705C] hover:bg-[#5a5f4e] text-white font-semibold text-xs rounded-xl transition shadow-sm flex items-center justify-center gap-2 cursor-pointer"
             >
-              <span>Sync All Devices With This Email</span>
+              <span>Connect Device In-App</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
         ) : (
-          /* Standard Auth Form */
+          /* Built-in In-App Auth (Email & Password first) */
           <>
-            {/* Google Auth Button */}
-            <button
-              onClick={handleGoogleSignIn}
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-3 py-2.5 px-4 bg-theme-accent hover:opacity-90 text-primary font-semibold text-xs rounded-xl transition border border-theme shadow-2xs disabled:opacity-50 mb-3 cursor-pointer"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.1 0-5.74-2.09-6.68-4.91H1.36v3.15C3.33 21.31 7.42 24 12 24z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.32 14.29c-.24-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.56H1.36C.49 8.29 0 10.09 0 12s.49 3.71 1.36 5.44l3.96-3.15z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.42 0 3.33 2.69 1.36 6.56l3.96 3.15c.94-2.82 3.58-4.96 6.68-4.96z"
-                />
-              </svg>
-              <span>Continue with Google Account</span>
-            </button>
-
-            <div className="relative my-3">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-theme"></div>
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase">
-                <span className="bg-surface px-2 text-muted font-mono">or email password</span>
-              </div>
+            <div className="mb-3 p-2.5 rounded-xl bg-theme-accent/40 border border-theme flex items-center gap-2 text-[11px] text-muted">
+              <Sparkles className="w-3.5 h-3.5 text-primary shrink-0" />
+              <span>Built-in In-App Sign In — No Safari pop-up windows or app switching.</span>
             </div>
 
-            {/* Email Form */}
+            {/* Email Form Directly Built In */}
             <form onSubmit={handleEmailAuth} className="space-y-3">
               {isSignUp && (
                 <div>
@@ -310,7 +280,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onEmailCh
                 disabled={loading}
                 className="w-full py-2.5 px-4 bg-[#6B705C] hover:bg-[#5a5f4e] text-white font-semibold text-xs rounded-xl transition shadow-sm disabled:opacity-50 mt-1 cursor-pointer"
               >
-                {loading ? 'Processing...' : isSignUp ? 'Create & Sync Account' : 'Sign In & Sync'}
+                {loading ? 'Processing...' : isSignUp ? 'Create Account (In-App)' : 'Sign In (In-App)'}
               </button>
             </form>
 
@@ -320,9 +290,45 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onEmailCh
                 onClick={() => setIsSignUp(!isSignUp)}
                 className="text-primary font-semibold hover:underline cursor-pointer"
               >
-                {isSignUp ? 'Sign In' : 'Sign Up'}
+                {isSignUp ? 'Sign In' : 'Create Account'}
               </button>
             </div>
+
+            <div className="relative my-4">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-theme"></div>
+              </div>
+              <div className="relative flex justify-center text-[10px] uppercase">
+                <span className="bg-surface px-2 text-muted font-mono">or external google sign-in</span>
+              </div>
+            </div>
+
+            {/* Google Auth Button (Secondary for users who want OAuth) */}
+            <button
+              onClick={handleGoogleSignIn}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2.5 py-2 px-3 bg-theme-accent/60 hover:bg-theme-accent text-primary text-xs font-medium rounded-xl transition border border-theme disabled:opacity-50 cursor-pointer"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                <path
+                  fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.1 0-5.74-2.09-6.68-4.91H1.36v3.15C3.33 21.31 7.42 24 12 24z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.32 14.29c-.24-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.56H1.36C.49 8.29 0 10.09 0 12s.49 3.71 1.36 5.44l3.96-3.15z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.42 0 3.33 2.69 1.36 6.56l3.96 3.15c.94-2.82 3.58-4.96 6.68-4.96z"
+                />
+              </svg>
+              <span>Sign in with Google (Uses browser pop-up)</span>
+            </button>
           </>
         )}
       </div>

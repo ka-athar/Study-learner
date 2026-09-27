@@ -546,7 +546,7 @@ function cleanDoc<T>(obj: T): T {
 /**
  * Merges two arrays of entities without dropping either side or creating duplicates.
  */
-function mergeCollection<T extends { id?: string | number }>(primary: T[] = [], secondary: T[] = []): T[] {
+export function mergeCollection<T extends { id?: string | number }>(primary: T[] = [], secondary: T[] = []): T[] {
   const map = new Map<string, T>();
   (secondary || []).forEach((item, idx) => {
     if (!item) return;
@@ -564,7 +564,7 @@ function mergeCollection<T extends { id?: string | number }>(primary: T[] = [], 
 /**
  * Merges syllabus subjects by name/id, combining chapters non-destructively.
  */
-function mergeSubjects(listA: any[] = [], listB: any[] = []): any[] {
+export function mergeSubjects(listA: any[] = [], listB: any[] = []): any[] {
   if (!listA || listA.length === 0) return listB || [];
   if (!listB || listB.length === 0) return listA || [];
   const map = new Map<string, any>();
@@ -669,6 +669,7 @@ export async function generateTransferPin(
         vaultsCount: Array.isArray(dataPayload?.vaults) ? dataPayload.vaults.length : 0,
         sessionsCount: Array.isArray(dataPayload?.sessions) ? dataPayload.sessions.length : 0,
         plansCount: Array.isArray(dataPayload?.plans) ? dataPayload.plans.length : 0,
+        revisionsCount: Array.isArray(dataPayload?.revisions) ? dataPayload.revisions.length : 0,
         testResultsCount: Array.isArray(dataPayload?.testResults) ? dataPayload.testResults.length : 0,
         notesCount: Array.isArray(dataPayload?.notes) ? dataPayload.notes.length : 0,
         flashcardsCount: Array.isArray(dataPayload?.flashcardDecks) ? dataPayload.flashcardDecks.length : 0
@@ -866,6 +867,7 @@ export async function redeemTransferPin(
   options?: {
     forcePull?: boolean;
     targetDeviceName?: string;
+    mode?: 'merge' | 'replace';
   }
 ): Promise<{ 
   success: boolean; 
@@ -882,6 +884,8 @@ export async function redeemTransferPin(
     flashcardsCount: number;
     assignmentsCount: number;
     testResultsCount: number;
+    sessionsCount: number;
+    revisionsCount: number;
   };
   message: string;
 }> {
@@ -1022,6 +1026,8 @@ export async function redeemTransferPin(
   const testResultsCount = Array.isArray(payload?.testResults) ? payload.testResults.length : 0;
   const sessionsCount = Array.isArray(payload?.sessions) ? payload.sessions.length : 0;
 
+  const revisionsCount = Array.isArray(payload?.revisions) ? payload.revisions.length : 0;
+
   const stats = {
     subjectsCount,
     chaptersCount,
@@ -1030,7 +1036,8 @@ export async function redeemTransferPin(
     flashcardsCount,
     assignmentsCount,
     testResultsCount,
-    sessionsCount
+    sessionsCount,
+    revisionsCount
   };
 
   // Permanently bind this device to the source device's partition
@@ -1200,6 +1207,147 @@ export async function checkPinRedeemedStatus(code: string): Promise<{
   } catch (fErr) {}
 
   return { redeemed: false };
+}
+
+export interface CompleteTransferBundle {
+  format: 'studyflow_universal_transfer_bundle';
+  version: '1.3.0';
+  exportedAt: string;
+  sourceDevice: {
+    deviceId: string;
+    deviceName: string;
+    userAgent?: string;
+  };
+  stats: {
+    subjectsCount: number;
+    chaptersCount: number;
+    sessionsCount: number;
+    revisionsCount: number;
+    plansCount: number;
+    testResultsCount: number;
+    flashcardsCount: number;
+    vaultsCount: number;
+  };
+  payload: any;
+  checksum: string;
+}
+
+/**
+ * Computes a fast string checksum for transfer verification
+ */
+function computeChecksum(dataStr: string): string {
+  let hash = 0;
+  for (let i = 0; i < dataStr.length; i++) {
+    const char = dataStr.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash |= 0;
+  }
+  return `CHK-${Math.abs(hash).toString(16).toUpperCase()}`;
+}
+
+/**
+ * Packages an entire study environment into a portable Universal Transfer Backup
+ */
+export function packageCompleteTransferBackup(payload: any): CompleteTransferBundle {
+  const devInfo = detectDeviceInfo();
+  const sanitized = sanitizePayloadForTransfer(payload) || {};
+
+  const subjects = Array.isArray(sanitized.subjects) ? sanitized.subjects : [];
+  const chaptersCount = subjects.reduce((sum: number, s: any) => sum + (s.chapters?.length || 0), 0);
+  const sessions = Array.isArray(sanitized.sessions) ? sanitized.sessions : [];
+  const revisions = Array.isArray(sanitized.revisions) ? sanitized.revisions : [];
+  const plans = Array.isArray(sanitized.plans) ? sanitized.plans : [];
+  const testResults = Array.isArray(sanitized.testResults) ? sanitized.testResults : [];
+  const flashcards = Array.isArray(sanitized.flashcardDecks) ? sanitized.flashcardDecks : [];
+  const vaults = Array.isArray(sanitized.vaults) ? sanitized.vaults : [];
+
+  const payloadString = JSON.stringify(sanitized);
+  const checksum = computeChecksum(payloadString);
+
+  return {
+    format: 'studyflow_universal_transfer_bundle',
+    version: '1.3.0',
+    exportedAt: new Date().toISOString(),
+    sourceDevice: {
+      deviceId: getOrCreateDeviceId(),
+      deviceName: devInfo.deviceName,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : ''
+    },
+    stats: {
+      subjectsCount: subjects.length,
+      chaptersCount,
+      sessionsCount: sessions.length,
+      revisionsCount: revisions.length,
+      plansCount: plans.length,
+      testResultsCount: testResults.length,
+      flashcardsCount: flashcards.length,
+      vaultsCount: vaults.length
+    },
+    payload: sanitized,
+    checksum
+  };
+}
+
+/**
+ * Downloads a Universal Transfer Backup as a JSON file
+ */
+export function downloadTransferBackupFile(bundle: CompleteTransferBundle, customName?: string) {
+  const dateStr = new Date().toISOString().split('T')[0];
+  const filename = customName || `studyflow_transfer_backup_${dateStr}.json`;
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Unpacks and validates a Universal Transfer Backup JSON text
+ */
+export function unpackAndValidateTransferBackup(jsonText: string): {
+  success: boolean;
+  bundle?: CompleteTransferBundle;
+  message: string;
+} {
+  try {
+    const parsed = JSON.parse(jsonText);
+
+    // Support both direct bundle or raw payload export
+    let payload = parsed.payload || parsed;
+    if (parsed.format === 'studyflow_universal_transfer_bundle' && parsed.payload) {
+      payload = parsed.payload;
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      return {
+        success: false,
+        message: 'Invalid transfer file: Root structure must be a valid JSON object.'
+      };
+    }
+
+    const sanitized = sanitizePayloadForTransfer(payload);
+    const bundle = packageCompleteTransferBackup(sanitized);
+
+    // If source device had a name in the file, preserve it
+    if (parsed.sourceDevice?.deviceName) {
+      bundle.sourceDevice.deviceName = parsed.sourceDevice.deviceName;
+    }
+
+    return {
+      success: true,
+      bundle,
+      message: `Verified transfer file from ${bundle.sourceDevice.deviceName}: ${bundle.stats.subjectsCount} subjects, ${bundle.stats.sessionsCount} sessions, ${bundle.stats.revisionsCount} revisions.`
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Failed to parse transfer file: ${err?.message || 'Invalid JSON'}`
+    };
+  }
 }
 
 

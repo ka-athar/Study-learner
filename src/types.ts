@@ -10,6 +10,10 @@ export interface Subtopic {
   id: string;
   name: string;
   completed: boolean;
+  sloCode?: string; // e.g. "SLO-1.1.2", "LO-3"
+  description?: string;
+  masteryLevel?: TopicStatus;
+  lastRevisedAt?: string;
 }
 
 export interface Topic {
@@ -198,11 +202,14 @@ export interface StudySession {
   subjectName: string;
   chapterName: string;
   topicName: string;
+  sloCode?: string; // Specific SLO code (e.g., "SLO-1.1.2")
+  sloName?: string; // Specific Learning Objective name
   result: 'Completed' | 'Partially completed' | 'Not completed';
   notes?: string;
   timestamp: number;
   assignmentId?: string;
   assignmentTitle?: string;
+  addedTo137?: boolean; // Track if 1-3-7 revision cycle was triggered
 }
 
 export type TopicCompletionStatus = 'Completed' | 'Needs Revision' | 'Partially completed' | 'Mastered';
@@ -391,6 +398,17 @@ export interface RevisionItem {
   sessionsCount?: number;
   lastSessionDurationMinutes?: number;
   completedAt?: string;
+  // 1-3-7 Spaced Repetition Engine extensions:
+  cycleStage?: 'day1' | 'day3' | 'day7';
+  completedStages?: Array<'day1' | 'day3' | 'day7'>;
+  isGraduated?: boolean;
+  initialStudyDate?: string; // Day 0 initial learning date
+  linkedSloIds?: string[]; // Specific SLO / Subtopic IDs covered
+  linkedSloNames?: string[]; // Names of specific Learning Objectives
+  relatedTestDate?: string; // Upcoming test related to this topic
+  relatedTestName?: string;
+  isOverdue?: boolean;
+  daysOverdue?: number;
 }
 
 export interface UserNote {
@@ -731,6 +749,7 @@ export interface FlashcardDeck {
 
 export type ActiveTab = 
   | 'dashboard' 
+  | 'study_habits'
   | 'gemini_notebook'
   | 'boss_battle'
   | 'knowledge_graph'
@@ -753,6 +772,8 @@ export type ActiveTab =
   | 'calendar' 
   | 'progress' 
   | 'revision' 
+  | '137_revision'
+  | 'test_prep'
   | 'tests' 
   | 'vaults'
   | 'tutor' 
@@ -1427,6 +1448,200 @@ export interface CognitiveTopicHealth {
   nextRecommendedReviewDate: string;
   missedEssentialsCount: number;
 }
+
+// -------------------------------------------------------------
+// TEST PREPARATION ENGINE & MULTI-MONTH WORKLOAD
+// -------------------------------------------------------------
+
+export interface TestSloAudit {
+  sloId: string;
+  sloName: string;
+  topicName: string;
+  chapterName: string;
+  subjectName: string;
+  masteryStatus: TopicStatus;
+  hasUncuredMistakes: boolean;
+  mistakesCount: number;
+  daysSinceLastRevision: number;
+  isCoveredIn137: boolean;
+  revisionUrgency: 'immediate' | 'scheduled' | 'mastered';
+}
+
+export interface TestPreparationTimeline {
+  testId: string;
+  testTitle: string;
+  subjectName: string;
+  testDate: string; // YYYY-MM-DD
+  daysRemaining: number;
+  estimatedWeightMarks?: number;
+  includedTopics: string[];
+  auditedSlos: TestSloAudit[];
+  preparationStatus: 'on_track' | 'needs_attention' | 'critical_rush';
+  dailyTargetQuota: {
+    recommendedHoursPerDay: number;
+    slosPerDay: number;
+    mistakeDrillsPerDay: number;
+  };
+  preparationPhases: Array<{
+    phaseName: 'Foundation & Coverage' | 'Targeted 1-3-7 Deep Revision' | 'Mistake Autopsy & Mock Papers' | 'Pre-Exam High-Yield Sprint';
+    dateRange: string;
+    actionableTasks: string[];
+    isCurrentPhase: boolean;
+  }>;
+}
+
+export interface DayWorkloadDiagnostic {
+  date: string; // YYYY-MM-DD
+  totalCommitmentHours: number;
+  plannedTasksCount: number;
+  revisionsDue137Count: number;
+  isTestDay: boolean;
+  testNames?: string[];
+  pressureLevel: 'optimal' | 'moderate' | 'overloaded' | 'burnout_risk';
+  conflicts: string[];
+}
+
+// ==========================================
+// STUDY HABITS & PROGRESS SYSTEM TYPES
+// ==========================================
+
+export type StudyHabitId = 
+  | 'daily_planning' 
+  | 'focused_study' 
+  | 'mcq_practice' 
+  | 'active_recall' 
+  | '137_revision' 
+  | 'mistake_review' 
+  | 'weekly_review';
+
+export interface StudyHabitDefinition {
+  id: StudyHabitId;
+  title: string;
+  shortLabel: string;
+  description: string;
+  icon: string;
+  category: 'planning' | 'execution' | 'retention' | 'review';
+  color: string;
+  autoDetectHint: string;
+}
+
+export interface DailyHabitItemState {
+  completed: boolean;
+  autoCompleted?: boolean;
+  completedAt?: string;
+  sourceDetails?: string;
+  manualOverride?: boolean;
+  customNotes?: string;
+}
+
+export interface DailyHabitEntry {
+  date: string; // YYYY-MM-DD
+  habits: Record<StudyHabitId, DailyHabitItemState>;
+  plannedMinutes?: number;
+  completedMinutes?: number;
+  importantTasksCount?: number;
+  completedTasksCount?: number;
+  revisionsDueCount?: number;
+  revisionsCompletedCount?: number;
+  overallProgressPercentage?: number;
+  reflectionNote?: string;
+  reviewNotes?: string; // Rich notes of what the student accomplished today
+  studiedTopicsSummary?: string;
+  updatedAt?: string;
+}
+
+export interface WeeklyReviewItem {
+  id: string;
+  text: string;
+  completed: boolean;
+  category?: 'academic' | 'revision' | 'exam_prep' | 'habit';
+  createdAt?: string;
+}
+
+export interface WeeklyReviewRecord {
+  weekKey: string; // e.g. "2026-09-Week-1"
+  weekNumber: number;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  summaryNotes: string; // What was accomplished / studied this week
+  wins: string[];
+  improvements: string[];
+  reviewItems: WeeklyReviewItem[];
+  completed: boolean;
+  completedAt?: string;
+  updatedAt?: string;
+}
+
+export interface HabitConsistencyStats {
+  currentStreakDays: number;
+  longestStreakDays: number;
+  monthlyCompletionRate: number;
+  weeklyCompletionRate: number;
+  mostConsistentHabit?: string;
+  completedHabitDaysThisMonth: number;
+  totalHabitOpportunitiesThisMonth: number;
+  totalStudyMinutesThisMonth: number;
+  plannedStudyMinutesThisMonth: number;
+  topProductiveDayOfWeek: string;
+}
+
+// ==========================================
+// DEVICE CONNECTION & DATA TRANSFER SAFETY TYPES
+// ==========================================
+
+export type TransferWorkflowStep = 
+  | 'idle'
+  | 'connected'
+  | 'authenticated'
+  | 'transfer_started'
+  | 'transfer_progress'
+  | 'validating'
+  | 'complete'
+  | 'error';
+
+export interface EntityDiffSummary {
+  entityName: string;
+  newCount: number;
+  updatedCount: number;
+  conflictCount: number;
+  sampleItems?: Array<{
+    id: string;
+    title: string;
+    action: 'new' | 'update' | 'conflict';
+    reason?: string;
+  }>;
+}
+
+export interface TransferSafetyDiff {
+  sourceDeviceName: string;
+  sourceUid?: string;
+  sourceEmail?: string;
+  timestamp: string;
+  totalNew: number;
+  totalUpdated: number;
+  totalConflicts: number;
+  entities: {
+    syllabus: EntityDiffSummary;
+    topics: EntityDiffSummary;
+    tests: EntityDiffSummary;
+    mistakes: EntityDiffSummary;
+    flashcards: EntityDiffSummary;
+    revisions: EntityDiffSummary;
+    plans: EntityDiffSummary;
+    habits: EntityDiffSummary;
+    sessions: EntityDiffSummary;
+    vaults: EntityDiffSummary;
+    settings: EntityDiffSummary;
+  };
+  hasPreTransferBackup: boolean;
+  preTransferBackupId?: string;
+}
+
+export type ConflictResolutionMode = 
+  | 'smart_merge'        // Non-destructive: merges items by unique ID / title, preserves both if conflicted
+  | 'keep_local'          // Keeps this device's records in any conflict
+  | 'overwrite_incoming'; // Replaces local records with incoming device records
+
 
 
 

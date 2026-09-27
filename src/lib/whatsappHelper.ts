@@ -86,12 +86,19 @@ export function buildWaMeUrl(phoneNumber: string, text: string): string {
 
 export function generateCompletedWorkWhatsAppMessage(session: {
   subjectName: string;
+  chapterName?: string;
   topicName: string;
   durationMinutes: number;
   notes?: string;
   date?: string;
   studentName?: string;
   status?: string;
+  sloCode?: string;
+  sloName?: string;
+  addedTo137?: boolean;
+  cycleDates?: { day1?: string; day3?: string; day7?: string };
+  streak?: number;
+  todayTotalMinutes?: number;
 }): string {
   const dateStr = session.date || new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   let msg = `✅ *STUDY SESSION COMPLETED* ⏱️\n\n`;
@@ -100,15 +107,35 @@ export function generateCompletedWorkWhatsAppMessage(session: {
   }
   msg += `📅 *Date:* ${dateStr}\n`;
   msg += `📚 *Subject:* ${session.subjectName}\n`;
+  if (session.chapterName) {
+    msg += `📑 *Chapter:* ${session.chapterName}\n`;
+  }
   msg += `📖 *Topic:* ${session.topicName}\n`;
-  msg += `⏱️ *Focus Time:* ${session.durationMinutes} minutes\n`;
+  if (session.sloCode || session.sloName) {
+    msg += `🎯 *SLO:* ${session.sloCode ? `[${session.sloCode}] ` : ''}${session.sloName || ''}\n`;
+  }
+  msg += `⏱️ *Focus Time Logged:* ${session.durationMinutes} minutes\n`;
+  if (session.todayTotalMinutes) {
+    msg += `⏳ *Today's Total Focus:* ${session.todayTotalMinutes} mins\n`;
+  }
+  if (session.streak) {
+    msg += `🔥 *Daily Streak:* ${session.streak} Days Strong\n`;
+  }
   if (session.status) {
-    msg += `🎯 *Status:* ${session.status}\n`;
+    msg += `✨ *Outcome:* ${session.status}\n`;
   }
+
+  if (session.addedTo137) {
+    msg += `\n🧠 *1-3-7 Spaced Revision Active:*\n`;
+    if (session.cycleDates?.day1) msg += `• Day 1 Review: ${session.cycleDates.day1}\n`;
+    if (session.cycleDates?.day3) msg += `• Day 3 Review: ${session.cycleDates.day3}\n`;
+    if (session.cycleDates?.day7) msg += `• Day 7 Review: ${session.cycleDates.day7}\n`;
+  }
+
   if (session.notes) {
-    msg += `📝 *Takeaways:* ${session.notes}\n`;
+    msg += `\n📝 *Notes / Active Recall:*\n${session.notes}\n`;
   }
-  msg += `\n🎯 Keep pushing forward with relentless consistency!`;
+  msg += `\n🎯 Relentless consistency builds mastery. Keep going!`;
   return msg;
 }
 

@@ -487,6 +487,7 @@ export function cacheAllDataLocally(data: {
   mockExams?: GradedMockExam[];
   assignments?: Assignment[];
   missedWork?: MissedWorkItem[];
+  studyHabits?: Record<string, any>;
 }) {
   if (data.profile) saveLocalState('profile', data.profile);
   if (data.subjects) saveLocalState('syllabus', data.subjects);
@@ -503,6 +504,7 @@ export function cacheAllDataLocally(data: {
   if (data.mockExams) saveLocalState('mockExams', data.mockExams);
   if (data.assignments) saveLocalState('assignments', data.assignments);
   if (data.missedWork) saveLocalState('missedWork', data.missedWork);
+  if (data.studyHabits) saveLocalState('studyHabits', data.studyHabits);
 }
 
 export function loadAllDataFromLocal() {
@@ -521,7 +523,8 @@ export function loadAllDataFromLocal() {
     chatHistory: loadLocalState<AIChatMessage[]>('chatHistory', []),
     mockExams: loadLocalState<GradedMockExam[]>('mockExams', []),
     assignments: loadLocalState<Assignment[]>('assignments', DEFAULT_ASSIGNMENTS),
-    missedWork: deduplicateMissedWork(loadLocalState<MissedWorkItem[]>('missedWork', []))
+    missedWork: deduplicateMissedWork(loadLocalState<MissedWorkItem[]>('missedWork', [])),
+    studyHabits: loadLocalState<Record<string, any>>('studyHabits', {})
   };
 }
 

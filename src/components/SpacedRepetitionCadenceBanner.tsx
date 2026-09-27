@@ -36,6 +36,7 @@ interface SpacedRepetitionCadenceBannerProps {
   userProfile: UserProfile | null;
   onStartSprintForTopic: (subjectName: string, chapterName: string, topicName: string) => void;
   onOpenCheatSheetForTopic?: (subjectName: string, topicName: string) => void;
+  onNavigateTab?: (tab: any) => void;
 }
 
 export const SpacedRepetitionCadenceBanner: React.FC<SpacedRepetitionCadenceBannerProps> = ({
@@ -44,7 +45,8 @@ export const SpacedRepetitionCadenceBanner: React.FC<SpacedRepetitionCadenceBann
   sessions,
   userProfile,
   onStartSprintForTopic,
-  onOpenCheatSheetForTopic
+  onOpenCheatSheetForTopic,
+  onNavigateTab
 }) => {
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [emailStatus, setEmailStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -246,6 +248,17 @@ export const SpacedRepetitionCadenceBanner: React.FC<SpacedRepetitionCadenceBann
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {onNavigateTab && (
+            <button
+              onClick={() => onNavigateTab('137_revision')}
+              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+              title="Open full dedicated 1-3-7 Revision Command Center"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>1-3-7 Command Center</span>
+            </button>
+          )}
+
           <button
             onClick={handleSendSpacedRepetitionEmail}
             disabled={isSendingEmail || dueItems.length === 0}

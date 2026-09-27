@@ -55,7 +55,13 @@ import {
   detectDeviceInfo,
   pullFullCloudSnapshot,
   forcePullEntireCloudState,
-  registerCurrentDevice
+  registerCurrentDevice,
+  packageCompleteTransferBackup,
+  downloadTransferBackupFile,
+  unpackAndValidateTransferBackup,
+  CompleteTransferBundle,
+  mergeCollection,
+  mergeSubjects
 } from '../lib/deviceService';
 import { 
   getActiveUserEmail, 
@@ -158,9 +164,11 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
   const [pendingQueueCount, setPendingQueueCount] = useState<number>(0);
   const [isRollingBack, setIsRollingBack] = useState<boolean>(false);
 
-  // JSON File Import/Export State
+  // JSON File Import/Export & Transfer Mode State
   const [isExportingJson, setIsExportingJson] = useState<boolean>(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [transferMode, setTransferMode] = useState<'merge' | 'replace'>('merge');
+  const [pendingBackupToImport, setPendingBackupToImport] = useState<CompleteTransferBundle | null>(null);
 
   const currentDeviceId = getOrCreateDeviceId();
   const currentDevInfo = detectDeviceInfo();
@@ -311,7 +319,10 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
     setIsRedeemingPin(true);
     setConnectMessage(null);
     try {
-      const res = await redeemTransferPin(pinToUse, { forcePull: forcePullOnRedeem });
+      const res = await redeemTransferPin(pinToUse, { 
+        forcePull: forcePullOnRedeem,
+        mode: transferMode
+      });
       if (!res.success) {
         setConnectMessage({
           type: 'error',
@@ -648,42 +659,31 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
     }
   };
 
-  // Export full JSON snapshot
+  // Export full JSON snapshot with 100% complete transfer bundle
   const handleExportFullJson = () => {
     setIsExportingJson(true);
     try {
       const fullData = loadAllDataFromLocal();
-      const exportObject = {
-        app: "PrepForge Academic StudyOS",
-        version: "2.6.0",
-        exportedAt: new Date().toISOString(),
-        device: currentDevInfo,
-        data: {
-          subjects: subjects.length > 0 ? subjects : fullData.subjects,
-          plans: plans.length > 0 ? plans : fullData.plans,
-          sessions: sessions.length > 0 ? sessions : fullData.sessions,
-          vaults: vaults.length > 0 ? vaults : fullData.vaults,
-          assignments: assignments.length > 0 ? assignments : fullData.assignments,
-          testResults: testResults.length > 0 ? testResults : fullData.testResults,
-          flashcardDecks: flashcardDecks.length > 0 ? flashcardDecks : fullData.flashcardDecks,
-          revisions: revisions.length > 0 ? revisions : fullData.revisions,
-          profile: userProfile || fullData.profile
-        }
+      const payload = {
+        subjects: subjects.length > 0 ? subjects : fullData.subjects,
+        plans: plans.length > 0 ? plans : fullData.plans,
+        sessions: sessions.length > 0 ? sessions : fullData.sessions,
+        vaults: vaults.length > 0 ? vaults : fullData.vaults,
+        assignments: assignments.length > 0 ? assignments : fullData.assignments,
+        testResults: testResults.length > 0 ? testResults : fullData.testResults,
+        flashcardDecks: flashcardDecks.length > 0 ? flashcardDecks : fullData.flashcardDecks,
+        revisions: revisions.length > 0 ? revisions : fullData.revisions,
+        notes: notes.length > 0 ? notes : fullData.notes,
+        activityLogs: activityLogs.length > 0 ? activityLogs : fullData.activityLogs,
+        profile: userProfile || fullData.profile
       };
 
-      const blob = new Blob([JSON.stringify(exportObject, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `StudyFlow_Full_Academic_Backup_${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const bundle = packageCompleteTransferBackup(payload);
+      downloadTransferBackupFile(bundle);
 
       setConnectMessage({
         type: 'success',
-        text: 'Backup downloaded! You can transfer this file to any device via USB, AirDrop, email, or cloud drive.'
+        text: `Backup exported! Transfer bundle (${bundle.stats.subjectsCount} subjects, ${bundle.stats.sessionsCount} sessions, ${bundle.stats.revisionsCount} revisions) is ready for any device.`
       });
     } catch (err: any) {
       setConnectMessage({
@@ -695,7 +695,7 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
     }
   };
 
-  // Import JSON snapshot from file
+  // Inspect & stage JSON transfer file for import
   const handleImportJsonFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -704,45 +704,72 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
     reader.onload = async (event) => {
       try {
         const content = event.target?.result as string;
-        const parsed = JSON.parse(content);
-        const importedData = parsed.data || parsed;
-
-        if (!importedData || (!importedData.subjects && !importedData.syllabus)) {
-          throw new Error('Invalid StudyFlow backup format.');
+        const validation = unpackAndValidateTransferBackup(content);
+        if (!validation.success || !validation.bundle) {
+          throw new Error(validation.message || 'Invalid StudyFlow transfer bundle.');
         }
 
-        const normalizedData = {
-          subjects: importedData.subjects || importedData.syllabus || [],
-          plans: importedData.plans || [],
-          sessions: importedData.sessions || [],
-          vaults: importedData.vaults || [],
-          assignments: importedData.assignments || [],
-          testResults: importedData.testResults || [],
-          flashcardDecks: importedData.flashcardDecks || [],
-          revisions: importedData.revisions || [],
-          profile: importedData.profile || null
-        };
-
-        cacheAllDataLocally(normalizedData);
-        if (onRestoreData) {
-          await onRestoreData(normalizedData);
-        }
-
-        const targetUid = resolveActiveUserId(user, searchEmail);
-        await forceSyncAllToCloud(targetUid, normalizedData);
-
-        setConnectMessage({
-          type: 'success',
-          text: `Successfully imported ${normalizedData.subjects.length} subjects, ${normalizedData.assignments.length} assignments, and all coursework records!`
-        });
+        // Open inspection preview modal for confirmation
+        setPendingBackupToImport(validation.bundle);
       } catch (err: any) {
         setConnectMessage({
           type: 'error',
-          text: err?.message || 'Error reading JSON backup file.'
+          text: err?.message || 'Error parsing transfer backup file.'
         });
       }
     };
     reader.readAsText(file);
+    // Reset input
+    e.target.value = '';
+  };
+
+  // Execute applied import from staged bundle
+  const handleApplyImportedBackup = async () => {
+    if (!pendingBackupToImport) return;
+    const bundle = pendingBackupToImport;
+
+    try {
+      const incomingPayload = bundle.payload;
+      let finalDataToStore: any = incomingPayload;
+
+      if (transferMode === 'merge') {
+        const localData = loadAllDataFromLocal();
+        finalDataToStore = {
+          subjects: mergeSubjects(localData.subjects, incomingPayload.subjects),
+          sessions: mergeCollection(localData.sessions, incomingPayload.sessions),
+          plans: mergeCollection(localData.plans, incomingPayload.plans),
+          testResults: mergeCollection(localData.testResults, incomingPayload.testResults),
+          vaults: mergeCollection(localData.vaults, incomingPayload.vaults),
+          assignments: mergeCollection(localData.assignments, incomingPayload.assignments),
+          flashcardDecks: mergeCollection(localData.flashcardDecks, incomingPayload.flashcardDecks),
+          revisions: mergeCollection(localData.revisions, incomingPayload.revisions),
+          notes: mergeCollection(localData.notes, incomingPayload.notes),
+          activityLogs: mergeCollection(localData.activityLogs, incomingPayload.activityLogs),
+          profile: incomingPayload.profile || localData.profile || null
+        };
+      }
+
+      cacheAllDataLocally(finalDataToStore);
+      if (onRestoreData) {
+        await onRestoreData(finalDataToStore);
+      }
+
+      const targetUid = resolveActiveUserId(user, searchEmail);
+      if (targetUid) {
+        await forceSyncAllToCloud(targetUid, finalDataToStore);
+      }
+
+      setPendingBackupToImport(null);
+      setConnectMessage({
+        type: 'success',
+        text: `🎉 Restored transfer bundle from ${bundle.sourceDevice.deviceName}! (${bundle.stats.subjectsCount} subjects, ${bundle.stats.sessionsCount} sessions, ${bundle.stats.revisionsCount} 1-3-7 revision topics). Mode: ${transferMode === 'merge' ? 'Smart Merge' : 'Clean Replace'}.`
+      });
+    } catch (err: any) {
+      setConnectMessage({
+        type: 'error',
+        text: err?.message || 'Failed to restore transfer file.'
+      });
+    }
   };
 
   const handleRevokeDevice = async (targetDeviceId: string, devName: string) => {
@@ -1158,6 +1185,36 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
                       </button>
                     </div>
 
+                    {/* Transfer Mode Selection */}
+                    <div className="p-2.5 rounded-xl bg-theme-accent/40 border border-theme flex items-center justify-between gap-2 text-xs">
+                      <div>
+                        <span className="font-bold text-primary block text-[11px]">Sync Mode:</span>
+                        <span className="text-[10px] text-muted">
+                          {transferMode === 'merge' ? 'Combines incoming & current data' : 'Overwrites current data completely'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setTransferMode('merge')}
+                          className={`px-2.5 py-1 rounded-lg font-bold text-[10px] transition cursor-pointer ${
+                            transferMode === 'merge' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-muted hover:text-primary'
+                          }`}
+                        >
+                          Merge
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTransferMode('replace')}
+                          className={`px-2.5 py-1 rounded-lg font-bold text-[10px] transition cursor-pointer ${
+                            transferMode === 'replace' ? 'bg-amber-600 text-white shadow-2xs' : 'text-muted hover:text-primary'
+                          }`}
+                        >
+                          Replace
+                        </button>
+                      </div>
+                    </div>
+
                     <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-theme-accent/50 border border-theme text-[11px] text-muted cursor-pointer select-none">
                       <input
                         type="checkbox"
@@ -1172,7 +1229,7 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
                     </label>
 
                     <button
-                      onClick={handleRedeemPin}
+                      onClick={() => handleRedeemPin()}
                       disabled={isRedeemingPin || !inputPin.trim()}
                       className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 transition shadow-sm cursor-pointer disabled:opacity-50"
                     >
@@ -1186,6 +1243,45 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
                   </div>
                 </div>
 
+              </div>
+
+              {/* Universal Complete Transfer File Backup Card (100% Offline Compatible) */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-purple-500/10 via-indigo-500/10 to-teal-500/10 border border-purple-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <FileJson className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                    <span className="font-bold text-xs text-primary">Universal Transfer File (.json)</span>
+                    <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-800 dark:text-purple-300 font-mono text-[9px] font-bold">
+                      Offline Ready
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted max-w-xl leading-relaxed">
+                    Export or import a complete, tamper-proof study backup bundle containing 100% of your subjects, 1-3-7 revision cycles, timer logs, flashcards, and plans across any browser or device.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleExportFullJson}
+                    disabled={isExportingJson}
+                    className="px-3.5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer disabled:opacity-50"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download Backup (.json)</span>
+                  </button>
+
+                  <label className="px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#252825] hover:bg-theme-accent border border-theme text-primary text-xs font-bold flex items-center gap-1.5 transition shadow-2xs cursor-pointer">
+                    <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Import Backup File</span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleImportJsonFile}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
               </div>
 
               {/* Instant Status Summary & Manual Force Controls */}
@@ -1849,6 +1945,130 @@ export const DeviceEmailSyncModal: React.FC<DeviceEmailSyncModalProps> = ({
         </div>
 
       </div>
+
+      {/* Pending Import Inspection & Confirmation Dialog */}
+      {pendingBackupToImport && (
+        <div className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#1E201E] border border-theme rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center shrink-0">
+                  <FileJson className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-primary">Import Universal Transfer Bundle</h3>
+                  <p className="text-xs text-muted">
+                    Source: {pendingBackupToImport.sourceDevice.deviceName} • {new Date(pendingBackupToImport.exportedAt).toLocaleDateString()}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPendingBackupToImport(null)}
+                className="p-1.5 rounded-xl hover:bg-theme-accent text-muted hover:text-primary transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Breakdown Grid */}
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="p-2.5 rounded-xl bg-theme-accent/40 border border-theme">
+                <span className="text-sm font-extrabold text-primary block">{pendingBackupToImport.stats.subjectsCount}</span>
+                <span className="text-[10px] text-muted font-bold">Subjects ({pendingBackupToImport.stats.chaptersCount} ch)</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-theme-accent/40 border border-theme">
+                <span className="text-sm font-extrabold text-primary block">{pendingBackupToImport.stats.sessionsCount}</span>
+                <span className="text-[10px] text-muted font-bold">Study Sessions</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300">
+                <span className="text-sm font-extrabold block">{pendingBackupToImport.stats.revisionsCount}</span>
+                <span className="text-[10px] font-bold">1-3-7 Cycles</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-theme-accent/40 border border-theme">
+                <span className="text-sm font-extrabold text-primary block">{pendingBackupToImport.stats.plansCount}</span>
+                <span className="text-[10px] text-muted font-bold">Study Plans</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-theme-accent/40 border border-theme">
+                <span className="text-sm font-extrabold text-primary block">{pendingBackupToImport.stats.flashcardsCount}</span>
+                <span className="text-[10px] text-muted font-bold">Flashcards</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-theme-accent/40 border border-theme">
+                <span className="text-sm font-extrabold text-primary block">{pendingBackupToImport.stats.testResultsCount}</span>
+                <span className="text-[10px] text-muted font-bold">Test Scores</span>
+              </div>
+            </div>
+
+            {/* Checksum Badge */}
+            <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-800 dark:text-emerald-300 text-[11px] flex items-center justify-between">
+              <span className="font-bold flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                Integrity Verified:
+              </span>
+              <span className="font-mono text-[10px]">{pendingBackupToImport.checksum}</span>
+            </div>
+
+            {/* Mode Selector */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-primary block">Select Restore Strategy:</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTransferMode('merge')}
+                  className={`p-3 rounded-2xl border text-left transition cursor-pointer ${
+                    transferMode === 'merge'
+                      ? 'bg-emerald-500/10 border-emerald-500 text-primary shadow-xs'
+                      : 'bg-theme-accent/30 border-theme text-muted'
+                  }`}
+                >
+                  <div className="font-bold text-xs text-primary flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Smart Merge</span>
+                  </div>
+                  <div className="text-[10px] text-muted mt-1 leading-tight">
+                    Combines items safely with existing workspace. No local data lost.
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTransferMode('replace')}
+                  className={`p-3 rounded-2xl border text-left transition cursor-pointer ${
+                    transferMode === 'replace'
+                      ? 'bg-amber-500/10 border-amber-500 text-primary shadow-xs'
+                      : 'bg-theme-accent/30 border-theme text-muted'
+                  }`}
+                >
+                  <div className="font-bold text-xs text-primary flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Clean Replace</span>
+                  </div>
+                  <div className="text-[10px] text-muted mt-1 leading-tight">
+                    Completely overwrites local workspace with backup file.
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingBackupToImport(null)}
+                className="px-4 py-2.5 rounded-xl border border-theme text-muted hover:text-primary text-xs font-bold transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyImportedBackup}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold transition shadow-md active:scale-95 cursor-pointer"
+              >
+                Apply & Restore Workspace
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

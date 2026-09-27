@@ -119,6 +119,8 @@ import { StudyTimerView } from './components/StudyTimerView';
 import { CalendarView } from './components/CalendarView';
 import { ProgressView } from './components/ProgressView';
 import { RevisionView } from './components/RevisionView';
+import { Revision137CenterView } from './components/Revision137CenterView';
+import { calculate137Milestones, toLocalDateString } from './lib/spacedRevisionEngine';
 import { TestsView } from './components/TestsView';
 import { VaultsView } from './components/VaultsView';
 import { ActivityView } from './components/ActivityView';
@@ -164,6 +166,10 @@ import { InAppQRScannerModal } from './components/InAppQRScannerModal';
 import { ParsedQRResult } from './components/InAppQRScanner';
 import { SyncInspectorModal, SyncInspectorDetails } from './components/SyncInspectorModal';
 import { BackupRestoreModal } from './components/BackupRestoreModal';
+import { StudyHabitsProgressView } from './components/StudyHabitsProgressView';
+import { DeviceTransferModal } from './components/DeviceTransferModal';
+import { WeeklyAIProgressReportModal } from './components/WeeklyAIProgressReportModal';
+import { loadAllHabitEntries } from './lib/habitService';
 import { 
   loadRPGProfile, 
   saveRPGProfile, 
@@ -199,7 +205,12 @@ export default function App() {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | undefined>(undefined);
   const [isDeviceSyncModalOpen, setIsDeviceSyncModalOpen] = useState(false);
+  const [isDeviceTransferModalOpen, setIsDeviceTransferModalOpen] = useState(false);
+  const [pendingScannedPayload, setPendingScannedPayload] = useState<any>(null);
+  const [pendingTransferPin, setPendingTransferPin] = useState<string | undefined>(undefined);
   const [isQRScannerModalOpen, setIsQRScannerModalOpen] = useState(false);
+  const [isAIWeeklyReportModalOpen, setIsAIWeeklyReportModalOpen] = useState(false);
+  const [studyHabits, setStudyHabits] = useState(() => loadAllHabitEntries());
   const [isPrintKitModalOpen, setIsPrintKitModalOpen] = useState(false);
   const [isAudioStudyModalOpen, setIsAudioStudyModalOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
@@ -255,7 +266,7 @@ export default function App() {
   const [missedWork, setMissedWork] = useState<MissedWorkItem[]>([]);
 
   // Timer pre-selection state
-  const [timerTopic, setTimerTopic] = useState<{ subject?: string; chapter?: string; topic?: string }>({});
+  const [timerTopic, setTimerTopic] = useState<{ subject?: string; chapter?: string; topic?: string; durationMinutes?: number }>({});
 
   // Blurt Recall pre-selection state
   const [blurtInitialTopic, setBlurtInitialTopic] = useState<{ subjectName: string; chapterName?: string; topicName: string } | null>(null);
@@ -735,89 +746,32 @@ export default function App() {
   const handleQRScanResult = async (result: ParsedQRResult) => {
     if (!result) return;
 
-    // 1. Device Pairing / Transfer PIN
+    // 1. Device Pairing / Transfer PIN - Safe Preview Diff Mode
     if (result.type === 'transfer_pin' || result.transferPin) {
       const pin = result.transferPin || result.raw.replace(/[^0-9]/g, '').slice(0, 6);
       if (pin && pin.length === 6) {
         try {
           const res = await redeemTransferPin(pin, { forcePull: true });
-          if (res.success) {
-            const targetUid = res.uid || result.syncUid || effectiveUid;
-            const targetEmail = res.email || result.syncEmail;
-
-            // Permanently bind this device to the source device's partition
-            if (targetUid) {
-              setPairedSyncUid(targetUid);
-              setPairedSyncUidState(targetUid);
-            }
-
-            if (targetEmail) {
-              setActiveUserEmail(targetEmail);
-              setActiveEmail(targetEmail);
-              handleUpdateProfile({ email: targetEmail });
-            }
-
-            // Immediately switch LiveSync identity to the shared partition channel
-            if (targetUid) {
-              liveSync.updateIdentity(targetUid, targetEmail || activeEmail);
-            }
-
-            if (res.payload) {
-              await handleRestoreFullSnapshot(res.payload, targetUid);
-            }
-
-            const stats = res.stats || {
-              subjectsCount: res.payload?.subjects?.length || 0,
-              chaptersCount: res.payload?.subjects?.reduce((a: number, s: any) => a + (s.chapters?.length || 0), 0) || 0,
-              plansCount: res.payload?.plans?.length || 0,
-              vaultsCount: res.payload?.vaults?.length || 0,
-              flashcardsCount: res.payload?.flashcardDecks?.length || 0,
-              assignmentsCount: res.payload?.assignments?.length || 0,
-              testResultsCount: res.payload?.testResults?.length || 0,
-              sessionsCount: res.payload?.sessions?.length || 0,
-            };
-
-            const details: SyncInspectorDetails = {
+          if (res.success && res.payload) {
+            setPendingTransferPin(pin);
+            setPendingScannedPayload({
+              ...res.payload,
               deviceName: res.deviceName || 'Remote Device',
-              pin,
-              timestamp: new Date().toISOString(),
-              email: res.email,
-              stats,
-              hasPreSyncBackup: true
-            };
-            setLastSyncDetails(details);
-            try {
-              localStorage.setItem('prepforge_last_sync_details', JSON.stringify(details));
-            } catch (e) {}
-
-            if (stats.subjectsCount > 0 || (stats.testResultsCount && stats.testResultsCount > 0)) {
-              setActionBanner({
-                message: `🎉 In-App QR Scanned: Linked device "${res.deviceName || 'Remote Device'}" (PIN ${pin})! Transferred ${stats.subjectsCount} subjects (${stats.chaptersCount} chapters), ${stats.plansCount} plans, ${stats.testResultsCount || 0} tests & ${stats.vaultsCount} vaults. Permanent sync active!`,
-                type: 'success',
-                showInspectorBtn: true
-              });
-            } else {
-              setActionBanner({
-                message: `⚠️ Linked device "${res.deviceName || 'Remote Device'}" (PIN ${pin}), but 0 subjects were found on that device. Tap "Inspect Details" to view solutions.`,
-                type: 'info',
-                showInspectorBtn: true
-              });
-              // Automatically open the inspector modal so the user immediately sees what happened and has instant solutions!
-              setIsSyncInspectorOpen(true);
-            }
-          } else {
-            setActionBanner({
-              message: res.message || `Could not link device using PIN ${pin}. Please verify the code on your other device.`,
-              type: 'info'
+              uid: res.uid,
+              email: res.email
             });
+            setIsDeviceTransferModalOpen(true);
+            return;
+          } else {
+            setPendingTransferPin(pin);
+            setIsDeviceTransferModalOpen(true);
+            return;
           }
         } catch (err: any) {
-          setActionBanner({
-            message: `Pairing error: ${err.message || 'Failed to redeem PIN.'}`,
-            type: 'info'
-          });
+          setPendingTransferPin(pin);
+          setIsDeviceTransferModalOpen(true);
+          return;
         }
-        return;
       }
     }
 
@@ -1261,9 +1215,8 @@ export default function App() {
       return updated;
     });
 
-    // 2. CRITICAL: Save time directly to Revision (revisions)
-    const todayStr = session.date || new Date().toISOString().split('T')[0];
-    const dueDateStr = new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0];
+    // 2. CRITICAL: Save time directly to Revision (revisions) with 1-3-7 cycle preservation
+    const todayStr = session.date || toLocalDateString(new Date());
 
     setRevisions(prevRevs => {
       const sessSub = (session.subjectName || '').trim().toLowerCase();
@@ -1279,16 +1232,45 @@ export default function App() {
         const newTotal = prevTotal + session.durationMinutes;
         const count = (existingRev.sessionsCount || 1) + 1;
 
+        // Preserve immutable Day 0 anchor!
+        const initialDate = existingRev.initialStudyDate || existingRev.lastStudied || todayStr;
+        const milestones = calculate137Milestones(initialDate);
+        const completedStages = new Set(existingRev.completedStages || []);
+
+        let nextStage: 'day1' | 'day3' | 'day7' = existingRev.cycleStage || 'day1';
+        let nextDueDate = existingRev.dueDate || milestones.day1;
+        let isGraduated = Boolean(existingRev.isGraduated);
+
+        // Advance 1-3-7 stage when revision is performed on or past the target milestone
+        if (nextStage === 'day1') {
+          completedStages.add('day1');
+          nextStage = 'day3';
+          nextDueDate = milestones.day3;
+        } else if (nextStage === 'day3') {
+          completedStages.add('day3');
+          nextStage = 'day7';
+          nextDueDate = milestones.day7;
+        } else if (nextStage === 'day7') {
+          completedStages.add('day7');
+          isGraduated = true;
+          nextDueDate = milestones.day7;
+        }
+
         const updatedRev: RevisionItem = {
           ...existingRev,
           lastStudied: todayStr,
-          dueDate: dueDateStr,
+          initialStudyDate: initialDate,
+          dueDate: nextDueDate,
+          cycleStage: nextStage,
+          completedStages: Array.from(completedStages) as any,
+          isGraduated,
           timeSpentMinutes: newTotal,
           totalTimeSpentMinutes: newTotal,
           lastSessionDurationMinutes: session.durationMinutes,
           sessionsCount: count,
           priority: session.result === 'Not completed' ? 'High' : existingRev.priority,
-          status: session.result === 'Not completed' ? 'Pending' : existingRev.status,
+          status: isGraduated ? 'Completed' : (session.result === 'Not completed' ? 'Pending' : existingRev.status),
+          completedAt: isGraduated ? (existingRev.completedAt || new Date().toISOString()) : existingRev.completedAt,
           reason: session.notes 
             ? `Timed session (${session.durationMinutes}m): ${session.notes}` 
             : `Timed revision session (${session.durationMinutes}m, ${session.result}). Total time: ${newTotal}m.`
@@ -1296,6 +1278,7 @@ export default function App() {
 
         updatedRevs = prevRevs.map(r => r.id === existingRev.id ? updatedRev : r);
       } else {
+        const milestones = calculate137Milestones(todayStr);
         const newRevItem: RevisionItem = {
           id: `rev-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
           userId: effectiveUid,
@@ -1303,12 +1286,16 @@ export default function App() {
           chapterName: session.chapterName || '',
           topicName: session.topicName,
           lastStudied: todayStr,
-          dueDate: dueDateStr,
+          initialStudyDate: todayStr,
+          dueDate: milestones.day1,
+          cycleStage: 'day1',
+          completedStages: [],
+          isGraduated: false,
           priority: session.result === 'Not completed' ? 'High' : 'Medium',
           status: 'Pending',
           reason: session.notes 
             ? `Timer session (${session.durationMinutes}m): ${session.notes}` 
-            : `Timed study session: ${session.durationMinutes} mins logged (${session.result}).`,
+            : `Timed study session: ${session.durationMinutes} mins logged (${session.result}). Day 1 review set for ${milestones.day1}.`,
           timeSpentMinutes: session.durationMinutes,
           totalTimeSpentMinutes: session.durationMinutes,
           sessionsCount: 1,
@@ -1427,6 +1414,48 @@ export default function App() {
     setRevisions(prevRevs => {
       const updated = prevRevs.map(r => {
         if (r.id !== revisionId) return r;
+
+        // If this is a 1-3-7 tracked revision item
+        const initialDate = r.initialStudyDate || r.lastStudied || toLocalDateString(new Date());
+        const milestones = calculate137Milestones(initialDate);
+        const stageSet = new Set(r.completedStages || []);
+
+        if (r.isGraduated || r.cycleStage === 'day7') {
+          // If already at Day 7 or graduated, toggle between completed and pending
+          const newStatus: 'Completed' | 'Pending' = r.status === 'Completed' ? 'Pending' : 'Completed';
+          if (newStatus === 'Completed') stageSet.add('day7');
+          return {
+            ...r,
+            status: newStatus,
+            isGraduated: newStatus === 'Completed',
+            completedStages: Array.from(stageSet) as any,
+            completedAt: newStatus === 'Completed' ? new Date().toISOString() : undefined
+          };
+        }
+
+        // Progress stage Day 1 -> Day 3, or Day 3 -> Day 7
+        if (r.cycleStage === 'day1') {
+          stageSet.add('day1');
+          return {
+            ...r,
+            cycleStage: 'day3',
+            dueDate: milestones.day3,
+            completedStages: Array.from(stageSet) as any,
+            lastStudied: toLocalDateString(new Date()),
+            status: 'Pending'
+          };
+        } else if (r.cycleStage === 'day3') {
+          stageSet.add('day3');
+          return {
+            ...r,
+            cycleStage: 'day7',
+            dueDate: milestones.day7,
+            completedStages: Array.from(stageSet) as any,
+            lastStudied: toLocalDateString(new Date()),
+            status: 'Pending'
+          };
+        }
+
         const newStatus: 'Completed' | 'Pending' = r.status === 'Completed' ? 'Pending' : 'Completed';
         return {
           ...r,
@@ -1460,6 +1489,255 @@ export default function App() {
       saveLocalState('revisions', updated);
       saveRevisionsToDb(effectiveUid, updated).catch(() => {});
       return updated;
+    });
+  };
+
+  /**
+   * Generates the authentic Day 1, Day 3, and Day 7 revision cycle anchored to initial study date
+   * and linked to the Subject -> Chapter -> Topic -> SLO hierarchy
+   */
+  const handleAdd137RevisionCycle = async (params: {
+    subjectName: string;
+    chapterName: string;
+    topicName: string;
+    sloCode?: string;
+    sloName?: string;
+    studyDate?: string;
+    timeSpentMinutes?: number;
+    notes?: string;
+  }) => {
+    const todayStr = params.studyDate || new Date().toISOString().split('T')[0];
+    const baseDate = new Date(todayStr);
+    baseDate.setHours(0, 0, 0, 0);
+
+    const day1Date = new Date(baseDate);
+    day1Date.setDate(baseDate.getDate() + 1);
+    const day1Str = day1Date.toISOString().split('T')[0];
+
+    const day3Date = new Date(baseDate);
+    day3Date.setDate(baseDate.getDate() + 3);
+    const day3Str = day3Date.toISOString().split('T')[0];
+
+    const day7Date = new Date(baseDate);
+    day7Date.setDate(baseDate.getDate() + 7);
+    const day7Str = day7Date.toISOString().split('T')[0];
+
+    // Primary active revision item anchored on Day 1
+    const newRevItem: RevisionItem = {
+      id: `137-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      userId: effectiveUid,
+      subjectName: params.subjectName,
+      chapterName: params.chapterName,
+      topicName: params.topicName,
+      lastStudied: todayStr,
+      dueDate: day1Str,
+      priority: 'High',
+      status: 'Pending',
+      reason: `1-3-7 Spaced Cycle: Initial Study on ${todayStr}. Day 1 due: ${day1Str}, Day 3 due: ${day3Str}, Day 7 due: ${day7Str}.${params.notes ? ` Notes: ${params.notes}` : ''}`,
+      timeSpentMinutes: params.timeSpentMinutes || 30,
+      totalTimeSpentMinutes: params.timeSpentMinutes || 30,
+      sessionsCount: 1,
+      lastSessionDurationMinutes: params.timeSpentMinutes || 30,
+      cycleStage: 'day1',
+      initialStudyDate: todayStr,
+      linkedSloIds: params.sloCode ? [params.sloCode] : undefined,
+      linkedSloNames: params.sloName ? [params.sloName] : undefined
+    };
+
+    setRevisions(prevRevs => {
+      const updated = [newRevItem, ...prevRevs.filter(r => !(r.subjectName.toLowerCase() === params.subjectName.toLowerCase() && r.topicName.toLowerCase() === params.topicName.toLowerCase()))];
+      saveLocalState('revisions', updated);
+      saveRevisionsToDb(effectiveUid, updated).catch(() => {});
+      return updated;
+    });
+
+    setActionBanner({
+      message: `✨ Added "${params.topicName}" to 1-3-7 Revision! Day 1 (${day1Str}), Day 3 (${day3Str}), and Day 7 (${day7Str}) auto-scheduled.`,
+      type: 'success'
+    });
+  };
+
+  /**
+   * Reschedules or transfers an individual revision topic from one date to another
+   */
+  const handleRescheduleRevision = async (
+    topicInfo: { id?: string; subjectName: string; topicName: string; chapterName?: string },
+    newDueDate: string,
+    notes?: string
+  ) => {
+    setRevisions(prevRevs => {
+      const matchIndex = prevRevs.findIndex(r => 
+        (topicInfo.id && r.id === topicInfo.id) ||
+        (r.subjectName.toLowerCase() === topicInfo.subjectName.toLowerCase() &&
+         r.topicName.toLowerCase() === topicInfo.topicName.toLowerCase())
+      );
+
+      let updated: RevisionItem[];
+      if (matchIndex >= 0) {
+        updated = prevRevs.map((r, i) => {
+          if (i !== matchIndex) return r;
+          return {
+            ...r,
+            dueDate: newDueDate,
+            reason: notes ? `${r.reason || ''} [Transferred to ${newDueDate}: ${notes}]`.trim() : (r.reason || `Transferred to ${newDueDate}`),
+            isOverdue: false
+          };
+        });
+      } else {
+        const newRevItem: RevisionItem = {
+          id: `rev-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          userId: effectiveUid,
+          subjectName: topicInfo.subjectName,
+          chapterName: topicInfo.chapterName || '',
+          topicName: topicInfo.topicName,
+          lastStudied: toLocalDateString(new Date()),
+          dueDate: newDueDate,
+          priority: 'High',
+          status: 'Pending',
+          reason: notes || `Transferred to ${newDueDate}`
+        };
+        updated = [newRevItem, ...prevRevs];
+      }
+
+      saveLocalState('revisions', updated);
+      saveRevisionsToDb(effectiveUid, updated).catch(() => {});
+      return updated;
+    });
+
+    setActionBanner({
+      message: `📅 Transferred "${topicInfo.topicName}" revision to ${newDueDate}!`,
+      type: 'success'
+    });
+  };
+
+  /**
+   * Recalibrates/transforms the Day 0 initial study date, shifting Day 1, Day 3, and Day 7 milestones
+   */
+  const handleTransform137Cycle = async (
+    subjectName: string,
+    topicName: string,
+    newDay0Date: string,
+    notes?: string
+  ) => {
+    const milestones = calculate137Milestones(newDay0Date);
+    setRevisions(prevRevs => {
+      const matchIndex = prevRevs.findIndex(r => 
+        r.subjectName.toLowerCase() === subjectName.toLowerCase() &&
+        r.topicName.toLowerCase() === topicName.toLowerCase()
+      );
+
+      let updated: RevisionItem[];
+      if (matchIndex >= 0) {
+        updated = prevRevs.map((r, i) => {
+          if (i !== matchIndex) return r;
+          const currentStage = r.cycleStage || 'day1';
+          const newDueDate = currentStage === 'day1' ? milestones.day1 : currentStage === 'day3' ? milestones.day3 : milestones.day7;
+          return {
+            ...r,
+            initialStudyDate: newDay0Date,
+            lastStudied: newDay0Date,
+            dueDate: newDueDate,
+            reason: `1-3-7 Spaced Cycle: Re-anchored to Day 0 (${newDay0Date}). Day 1: ${milestones.day1}, Day 3: ${milestones.day3}, Day 7: ${milestones.day7}.${notes ? ` Notes: ${notes}` : ''}`,
+            isOverdue: false
+          };
+        });
+      } else {
+        const newRevItem: RevisionItem = {
+          id: `137-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          userId: effectiveUid,
+          subjectName,
+          chapterName: '',
+          topicName,
+          lastStudied: newDay0Date,
+          dueDate: milestones.day1,
+          priority: 'High',
+          status: 'Pending',
+          reason: `1-3-7 Spaced Cycle: Initial Study on ${newDay0Date}. Day 1: ${milestones.day1}, Day 3: ${milestones.day3}, Day 7: ${milestones.day7}.${notes ? ` Notes: ${notes}` : ''}`,
+          cycleStage: 'day1',
+          initialStudyDate: newDay0Date
+        };
+        updated = [newRevItem, ...prevRevs];
+      }
+
+      saveLocalState('revisions', updated);
+      saveRevisionsToDb(effectiveUid, updated).catch(() => {});
+      return updated;
+    });
+
+    setActionBanner({
+      message: `🔄 Recalibrated 1-3-7 cycle for "${topicName}" anchored to ${newDay0Date}!`,
+      type: 'success'
+    });
+  };
+
+  /**
+   * Batch transfers multiple revision topics from one date to another
+   */
+  const handleBatchTransferRevisions = async (
+    itemsToTransfer: Array<{ id?: string; subjectName: string; topicName: string; chapterName?: string }>,
+    targetDueDate: string,
+    transferMode: 'due_date_only' | 'shift_timeline',
+    daysShift: number = 1
+  ) => {
+    setRevisions(prevRevs => {
+      const updated = [...prevRevs];
+
+      itemsToTransfer.forEach(item => {
+        const idx = updated.findIndex(r => 
+          (item.id && r.id === item.id) ||
+          (r.subjectName.toLowerCase() === item.subjectName.toLowerCase() &&
+           r.topicName.toLowerCase() === item.topicName.toLowerCase())
+        );
+
+        if (idx >= 0) {
+          const r = updated[idx];
+          if (transferMode === 'shift_timeline') {
+            const currentDay0 = r.initialStudyDate || r.lastStudied || toLocalDateString(new Date());
+            const d0 = new Date(currentDay0);
+            d0.setDate(d0.getDate() + daysShift);
+            const shiftedDay0 = toLocalDateString(d0);
+            const newMilestones = calculate137Milestones(shiftedDay0);
+            const stage = r.cycleStage || 'day1';
+            const newDue = stage === 'day1' ? newMilestones.day1 : stage === 'day3' ? newMilestones.day3 : newMilestones.day7;
+
+            updated[idx] = {
+              ...r,
+              initialStudyDate: shiftedDay0,
+              dueDate: newDue,
+              reason: `1-3-7 Timeline shifted by +${daysShift}d to ${shiftedDay0}`,
+              isOverdue: false
+            };
+          } else {
+            updated[idx] = {
+              ...r,
+              dueDate: targetDueDate,
+              isOverdue: false
+            };
+          }
+        } else {
+          updated.push({
+            id: `rev-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            userId: effectiveUid,
+            subjectName: item.subjectName,
+            chapterName: item.chapterName || '',
+            topicName: item.topicName,
+            lastStudied: toLocalDateString(new Date()),
+            dueDate: targetDueDate,
+            priority: 'High',
+            status: 'Pending',
+            reason: `Batch transferred to ${targetDueDate}`
+          });
+        }
+      });
+
+      saveLocalState('revisions', updated);
+      saveRevisionsToDb(effectiveUid, updated).catch(() => {});
+      return updated;
+    });
+
+    setActionBanner({
+      message: `🚀 Successfully transferred ${itemsToTransfer.length} topic${itemsToTransfer.length > 1 ? 's' : ''} to ${targetDueDate}!`,
+      type: 'success'
     });
   };
 
@@ -2063,8 +2341,13 @@ export default function App() {
     setRevisions([]);
   };
 
-  const handleStartTimerForTopic = (subjectName: string, chapterName: string, topicName: string) => {
-    setTimerTopic({ subject: subjectName, chapter: chapterName, topic: topicName });
+  const handleStartTimerForTopic = (
+    subjectName: string, 
+    chapterName: string, 
+    topicName: string, 
+    durationMinutes?: number
+  ) => {
+    setTimerTopic({ subject: subjectName, chapter: chapterName, topic: topicName, durationMinutes });
     setActiveTab('timer');
   };
 
@@ -2081,6 +2364,25 @@ export default function App() {
     } catch (e) {
       console.warn('RPG award error:', e);
     }
+  };
+
+  const handleUpdateTopicStatus = async (subjectName: string, topicName: string, status: any) => {
+    const subClean = (subjectName || '').toLowerCase();
+    const topClean = (topicName || '').toLowerCase();
+    const updatedSubjects = subjects.map(s => {
+      if (s.name.toLowerCase() !== subClean) return s;
+      return {
+        ...s,
+        chapters: s.chapters.map(c => ({
+          ...c,
+          topics: c.topics.map(t => {
+            if (t.name.toLowerCase() !== topClean) return t;
+            return { ...t, status };
+          })
+        }))
+      };
+    });
+    await handleUpdateSubjects(updatedSubjects);
   };
 
   const todayDateStr = new Date().toISOString().split('T')[0];
@@ -2125,6 +2427,7 @@ export default function App() {
         }}
         onOpenMaterialImport={() => setIsMaterialImportModalOpen(true)}
         onOpenDeviceSync={() => setIsDeviceSyncModalOpen(true)}
+        onOpenDeviceTransfer={() => setIsDeviceTransferModalOpen(true)}
         onOpenQRScanner={() => setIsQRScannerModalOpen(true)}
         onOpenPrintKit={() => setIsPrintKitModalOpen(true)}
         onOpenAudioStudy={() => {
@@ -2275,6 +2578,23 @@ export default function App() {
             }}
             onAddTestResult={handleAddTestResult}
             onAdjustPlanTopicDuration={handleAdjustPlanTopicDuration}
+          />
+        )}
+
+        {activeTab === 'study_habits' && (
+          <StudyHabitsProgressView
+            sessions={sessions}
+            testResults={testResults}
+            revisions={revisions}
+            plans={plans}
+            assignments={assignments}
+            targetStudyHours={userProfile?.targetHoursPerDay || 3}
+            onNavigateTab={setActiveTab}
+            onStartTimer={() => setActiveTab('timer')}
+            onOpen137Revision={() => setActiveTab('137_revision')}
+            onOpenMistakeVault={() => setActiveTab('mistake_vault')}
+            onOpenTests={() => setActiveTab('tests')}
+            onOpenAIWeeklyReport={() => setIsAIWeeklyReportModalOpen(true)}
           />
         )}
 
@@ -2454,6 +2774,7 @@ export default function App() {
             testResults={testResults}
             plans={plans}
             assignments={assignments}
+            revisions={revisions}
             userProfile={userProfile}
             onSavePlan={handleSavePlan}
             setActiveTab={setActiveTab}
@@ -2471,7 +2792,9 @@ export default function App() {
             initialSubject={timerTopic.subject}
             initialChapter={timerTopic.chapter}
             initialTopic={timerTopic.topic}
+            initialDurationMinutes={timerTopic.durationMinutes}
             onSaveSession={handleSaveSession}
+            onAddTo137Cycle={handleAdd137RevisionCycle}
             userProfile={userProfile}
             sessions={sessions}
             user={user}
@@ -2552,7 +2875,33 @@ export default function App() {
             onMarkRevisionDone={handleMarkRevisionDone}
             onDeleteRevision={handleDeleteRevision}
             onAddRevisionTopic={handleAddRevisionTopic}
+            onRescheduleRevision={handleRescheduleRevision}
             onNavigateTab={setActiveTab}
+          />
+        )}
+
+        {activeTab === '137_revision' && (
+          <Revision137CenterView
+            subjects={subjects}
+            sessions={sessions}
+            revisions={revisions}
+            testResults={testResults}
+            assignments={assignments}
+            userProfile={userProfile}
+            onStartTimerForTopic={handleStartTimerForTopic}
+            onMarkRevisionDone={handleMarkRevisionDone}
+            onAddRevisionTopic={handleAddRevisionTopic}
+            onAdd137RevisionCycle={handleAdd137RevisionCycle}
+            onRescheduleRevision={handleRescheduleRevision}
+            onTransform137Cycle={handleTransform137Cycle}
+            onBatchTransferRevisions={handleBatchTransferRevisions}
+            onAwardXP={handleAwardXP}
+            onUpdateTopicStatus={handleUpdateTopicStatus}
+            onNavigateTab={setActiveTab}
+            onOpenCheatSheetForTopic={(subj, top) => {
+              setCheatSheetTopic({ subject: subj, topic: top });
+              setIsCheatSheetModalOpen(true);
+            }}
           />
         )}
 
@@ -2870,6 +3219,38 @@ export default function App() {
         onOpenQRScanner={() => setIsQRScannerModalOpen(true)}
       />
 
+      {/* Safe Cross-Device Data Transfer & Connection Diff Modal */}
+      <DeviceTransferModal
+        isOpen={isDeviceTransferModalOpen}
+        onClose={() => {
+          setIsDeviceTransferModalOpen(false);
+          setPendingScannedPayload(null);
+          setPendingTransferPin(undefined);
+        }}
+        localDataset={{
+          profile: userProfile,
+          subjects,
+          sessions,
+          plans,
+          testResults,
+          vaults,
+          flashcardDecks,
+          revisions,
+          assignments,
+          studyHabits
+        }}
+        initialScannedPayload={pendingScannedPayload}
+        initialPin={pendingTransferPin}
+        onApplyTransferredData={async (mergedData, pairedUid) => {
+          await handleRestoreFullSnapshot(mergedData, pairedUid);
+          setActionBanner({
+            message: '🎉 Transfer complete! All records merged and verified safely with backup snapshot secured.',
+            type: 'success'
+          });
+        }}
+        onOpenQRScanner={() => setIsQRScannerModalOpen(true)}
+      />
+
       {/* In-App Optical QR Scanner Modal */}
       <InAppQRScannerModal
         isOpen={isQRScannerModalOpen}
@@ -3090,6 +3471,20 @@ export default function App() {
         diagnosedRootCause="Exam trap recovery and rapid active retrieval"
         missingConcepts={[]}
         onAwardXP={handleAwardXP}
+      />
+
+      {/* AI-Powered Weekly Progress Report & Remediation Modal (Options A, B, D) */}
+      <WeeklyAIProgressReportModal
+        isOpen={isAIWeeklyReportModalOpen}
+        onClose={() => setIsAIWeeklyReportModalOpen(false)}
+        sessions={sessions}
+        testResults={testResults}
+        revisions={revisions}
+        subjects={subjects}
+        userProfile={userProfile}
+        onAddTo137Cycle={handleAdd137RevisionCycle}
+        onSaveFlashcardDeck={handleSaveFlashcardDeck}
+        onNavigateTab={setActiveTab}
       />
 
       {/* Global Command Palette (Cmd + K / Ctrl + K) */}
