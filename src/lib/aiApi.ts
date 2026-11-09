@@ -326,19 +326,37 @@ export async function apiRefurbishKnowledge(params: {
 }
 
 export async function apiEvaluateFeynmanExplanation(params: {
-  conceptName: string;
-  explanation: string;
+  conceptName?: string;
+  topicName?: string;
+  chapterName?: string;
+  explanation?: string;
+  spokenTranscript?: string;
   subjectName?: string;
   targetAudience?: string;
 }) {
-  const response = await fetch('/api/ai/feynman-evaluate', {
+  const isOralEvaluation = Boolean(params.spokenTranscript || (!params.explanation && params.topicName));
+  const endpoint = isOralEvaluation ? '/api/ai/evaluate-feynman-explanation' : '/api/ai/feynman-evaluate';
+  
+  const payload = isOralEvaluation ? {
+    subjectName: params.subjectName || 'General',
+    topicName: params.topicName || params.conceptName || 'Academic Concept',
+    chapterName: params.chapterName,
+    spokenTranscript: params.spokenTranscript || params.explanation || ''
+  } : {
+    conceptName: params.conceptName || params.topicName || 'Academic Concept',
+    explanation: params.explanation || params.spokenTranscript || '',
+    subjectName: params.subjectName || 'General',
+    targetAudience: params.targetAudience || 'a 12-year-old beginner'
+  };
+
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
+    body: JSON.stringify(payload)
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error(err.error || 'Failed to analyze concept with Feynman technique');
+    throw new Error(err.error || 'Failed to evaluate Feynman explanation');
   }
   return await response.json();
 }
@@ -447,24 +465,6 @@ export async function apiGenerateWeeklyRetrospectiveSummary(params: {
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err.error || 'Failed to generate weekly retrospective summary');
-  }
-  return await response.json();
-}
-
-export async function apiEvaluateFeynmanExplanation(params: {
-  subjectName: string;
-  topicName: string;
-  chapterName?: string;
-  spokenTranscript: string;
-}) {
-  const response = await fetch('/api/ai/evaluate-feynman-explanation', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error || 'Failed to evaluate Feynman verbal explanation');
   }
   return await response.json();
 }

@@ -629,7 +629,7 @@ export async function saveSyllabusToDb(uid: string, subjects: Subject[]) {
 
 export function subscribeStudySessions(uid: string, callback: (sessions: StudySession[]) => void) {
   const colRef = collection(db, 'users', uid, 'studySessions');
-  const q = query(colRef, orderBy('timestamp', 'desc'), limit(150));
+  const q = query(colRef, orderBy('timestamp', 'desc'), limit(1000));
   return onSnapshot(q, (snapshot) => {
     const sessions: StudySession[] = [];
     snapshot.forEach((docSnap) => {
@@ -683,7 +683,7 @@ export async function addStudySessionToDb(uid: string, session: Omit<StudySessio
 
 export function subscribeStudyPlans(uid: string, callback: (plans: StudyPlan[]) => void) {
   const colRef = collection(db, 'users', uid, 'plans');
-  const q = query(colRef, orderBy('createdAt', 'desc'), limit(50));
+  const q = query(colRef, orderBy('createdAt', 'desc'), limit(1000));
   return onSnapshot(q, (snapshot) => {
     const plans: StudyPlan[] = [];
     snapshot.forEach((docSnap) => {
@@ -699,9 +699,33 @@ export function subscribeStudyPlans(uid: string, callback: (plans: StudyPlan[]) 
 }
 
 export async function saveStudyPlanToDb(uid: string, plan: Omit<StudyPlan, 'id'>): Promise<string> {
-  const localId = `plan-${Date.now()}`;
-  const fullPlan: StudyPlan = { id: localId, ...plan };
   const currentPlans = loadLocalState<StudyPlan[]>('plans', []);
+  // Check if a plan for this date already exists to merge rather than create duplicate
+  const existingByDate = plan.date ? currentPlans.find(p => p.date === plan.date) : null;
+  
+  if (existingByDate) {
+    const existingTopics = existingByDate.topics || [];
+    const newTopics = plan.topics || [];
+    const mergedTopics = [...existingTopics];
+    newTopics.forEach(nt => {
+      if (!mergedTopics.some(et => et.topicName.toLowerCase() === nt.topicName.toLowerCase() && et.subjectName.toLowerCase() === nt.subjectName.toLowerCase())) {
+        mergedTopics.push(nt);
+      }
+    });
+
+    const updatedPlan: StudyPlan = {
+      ...existingByDate,
+      ...plan,
+      topics: mergedTopics,
+      availableHours: Number((mergedTopics.reduce((acc, t) => acc + (t.estimatedMinutes || 45), 0) / 60).toFixed(1))
+    };
+
+    await updateStudyPlanInDb(uid, existingByDate.id, updatedPlan);
+    return existingByDate.id;
+  }
+
+  const localId = `plan-${plan.date || 'day'}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const fullPlan: StudyPlan = { id: localId, ...plan };
   saveLocalState('plans', [fullPlan, ...currentPlans]);
   updateSyncStatus({ state: 'saving', message: 'Saving study plan...' });
   liveSync.broadcastMutation({ collection: 'plans', action: 'INSERT', docId: localId, payload: fullPlan }).catch(() => {});
@@ -716,6 +740,109 @@ export async function saveStudyPlanToDb(uid: string, plan: Omit<StudyPlan, 'id'>
     updateSyncStatus({ state: 'local_only', mode: 'local', message: 'Plan saved to device storage' });
     return localId;
   }
+}
+
+/**
+ * High-throughput batch save for multiple study plans (e.g. allocating 100+ syllabus topics or sprint dates).
+ * Prevents concurrent write collisions, merges cleanly by date, and uses Firestore atomic writeBatch.
+ */
+export async function batchSaveStudyPlansToDb(
+  uid: string,
+  plansToSave: Array<StudyPlan | Omit<StudyPlan, 'id'>>
+): Promise<StudyPlan[]> {
+  if (!plansToSave || plansToSave.length === 0) return [];
+
+  const currentPlans = loadLocalState<StudyPlan[]>('plans', []);
+  const dateMap = new Map<string, StudyPlan>();
+
+  // Populate map with existing plans
+  currentPlans.forEach(p => {
+    if (p.date) dateMap.set(p.date, p);
+  });
+
+  const modifiedOrNewPlans: StudyPlan[] = [];
+
+  plansToSave.forEach((p, idx) => {
+    const targetDate = p.date;
+    const existing = targetDate ? dateMap.get(targetDate) : undefined;
+
+    if (existing) {
+      // Merge topics without duplicating
+      const existingTopics = existing.topics || [];
+      const incomingTopics = p.topics || [];
+      const mergedTopics = [...existingTopics];
+
+      incomingTopics.forEach(nt => {
+        const alreadyExists = mergedTopics.some(
+          et => et.topicName.trim().toLowerCase() === nt.topicName.trim().toLowerCase() &&
+                et.subjectName.trim().toLowerCase() === nt.subjectName.trim().toLowerCase()
+        );
+        if (!alreadyExists) {
+          mergedTopics.push(nt);
+        }
+      });
+
+      const totalMins = mergedTopics.reduce((acc, t) => acc + (t.estimatedMinutes || 45), 0);
+      const updated: StudyPlan = {
+        ...existing,
+        ...p,
+        id: existing.id,
+        topics: mergedTopics,
+        availableHours: Number((totalMins / 60).toFixed(1))
+      };
+
+      dateMap.set(targetDate, updated);
+      modifiedOrNewPlans.push(updated);
+    } else {
+      const planId = ('id' in p && p.id) 
+        ? p.id 
+        : `plan-${targetDate || 'date'}-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`;
+      
+      const newPlan: StudyPlan = {
+        ...p,
+        id: planId,
+        createdAt: p.createdAt || new Date().toISOString()
+      };
+
+      if (targetDate) dateMap.set(targetDate, newPlan);
+      modifiedOrNewPlans.push(newPlan);
+    }
+  });
+
+  const completePlanList = Array.from(dateMap.values());
+  completePlanList.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  // 1. Instant local persistence & sync broadcast
+  saveLocalState('plans', completePlanList);
+  updateSyncStatus({ state: 'saving', message: `Batch syncing ${modifiedOrNewPlans.length} study plan days...` });
+
+  // 2. Batch Firestore writes in chunks of 450 (well within 500 limit)
+  try {
+    const CHUNK_SIZE = 450;
+    for (let c = 0; c < modifiedOrNewPlans.length; c += CHUNK_SIZE) {
+      const slice = modifiedOrNewPlans.slice(c, c + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      slice.forEach(plan => {
+        const planDocRef = doc(db, 'users', uid, 'plans', plan.id);
+        batch.set(planDocRef, cleanForFirestore(plan), { merge: true });
+      });
+      await batch.commit();
+    }
+    updateSyncStatus({ 
+      state: 'saved', 
+      mode: 'cloud', 
+      message: `✓ Successfully synced ${modifiedOrNewPlans.length} calendar study plans to Cloud!` 
+    });
+  } catch (err: any) {
+    console.warn("Firestore batch write failed (preserved locally):", err);
+    updateSyncStatus({ 
+      state: 'local_only', 
+      mode: 'local', 
+      message: 'Plans saved to device storage (Cloud offline)' 
+    });
+  }
+
+  return completePlanList;
 }
 
 export async function updateStudyPlanInDb(uid: string, planId: string, updatedPlan: Partial<StudyPlan>) {
@@ -739,7 +866,7 @@ export async function updateStudyPlanInDb(uid: string, planId: string, updatedPl
 
 export function subscribeTestResults(uid: string, callback: (tests: TestResult[]) => void) {
   const colRef = collection(db, 'users', uid, 'testResults');
-  const q = query(colRef, orderBy('date', 'desc'), limit(100));
+  const q = query(colRef, orderBy('date', 'desc'), limit(1000));
   return onSnapshot(q, (snapshot) => {
     const tests: TestResult[] = [];
     snapshot.forEach((docSnap) => {
@@ -988,7 +1115,7 @@ export async function deleteVaultFromDb(uid: string, vaultId: string) {
 
 export function subscribeActivityLogs(uid: string, callback: (logs: ActivityLog[]) => void) {
   const colRef = collection(db, 'users', uid, 'activityLogs');
-  const q = query(colRef, orderBy('timestamp', 'desc'), limit(150));
+  const q = query(colRef, orderBy('timestamp', 'desc'), limit(1000));
   return onSnapshot(q, (snapshot) => {
     const logs: ActivityLog[] = [];
     snapshot.forEach((docSnap) => {

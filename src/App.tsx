@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth } from './lib/firebase';
 import { 
@@ -49,6 +49,7 @@ import {
   saveLocalState,
   cacheAllDataLocally,
   forceSyncAllToCloud,
+  batchSaveStudyPlansToDb,
   resolveActiveUserId,
   setActiveUserEmail,
   getActiveUserEmail,
@@ -62,6 +63,7 @@ import {
   subscribeUserDevices, 
   getOrCreateDeviceId,
   redeemTransferPin,
+  pullFullCloudSnapshot,
   updateDeviceHeartbeat 
 } from './lib/deviceService';
 import { 
@@ -96,6 +98,14 @@ import {
   StudyRPGProfile
 } from './types';
 import { evaluateAndSyncMissedWork, deduplicateMissedWork } from './lib/missedWorkService';
+import { 
+  analyzeStudyPlanIntoCalendar, 
+  batchAnalyzeStudyPlansIntoCalendar, 
+  getAllInAppCalendarEvents,
+  toggleInAppEventCompletionExternal,
+  deleteInAppEventFromExternalServices,
+  batchSynchronizeInAppCalendar
+} from './lib/inbuiltCalendarAnalyzer';
 
 import { DEFAULT_SYLLABUS } from './data/defaultSyllabus';
 import { DEFAULT_STUDY_GROUPS } from './data/defaultGroups';
@@ -120,8 +130,11 @@ import { CalendarView } from './components/CalendarView';
 import { ProgressView } from './components/ProgressView';
 import { RevisionView } from './components/RevisionView';
 import { Revision137CenterView } from './components/Revision137CenterView';
-import { calculate137Milestones, toLocalDateString } from './lib/spacedRevisionEngine';
+import { calculate137Milestones, toLocalDateString, build137RevisionPipeline } from './lib/spacedRevisionEngine';
+import { loadMistakes } from './lib/mistakeVaultStorage';
 import { TestsView } from './components/TestsView';
+import { TestPreparationView } from './components/TestPreparationView';
+import { GlobalTimerPill } from './components/GlobalTimerPill';
 import { VaultsView } from './components/VaultsView';
 import { ActivityView } from './components/ActivityView';
 import { AITutorView } from './components/AITutorView';
@@ -138,6 +151,9 @@ import { checkAndTriggerPushNotifications, setupPushActionListener } from './lib
 import { detectCalendarReschedules, applyCalendarReschedules, CalendarRescheduleItem } from './lib/googleCalendarService';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { EmailAgendaModal } from './components/EmailAgendaModal';
+import { GoogleChatNotificationModal } from './components/GoogleChatNotificationModal';
+import { GoogleChatSidebar } from './components/GoogleChatSidebar';
+import { checkAndTriggerGoogleChatAutomatedDispatches, getGoogleChatConfig, saveGoogleChatConfig } from './lib/googleChatService';
 import { GoogleWorkspaceHubModal } from './components/GoogleWorkspaceHubModal';
 import { AIMaterialImportModal } from './components/AIMaterialImportModal';
 import { PrintableStudyKitModal } from './components/PrintableStudyKitModal';
@@ -164,11 +180,33 @@ import { addMistake } from './lib/mistakeVaultStorage';
 import { triggerServerAutonomousPushTest } from './lib/pushNotificationManager';
 import { InAppQRScannerModal } from './components/InAppQRScannerModal';
 import { ParsedQRResult } from './components/InAppQRScanner';
+import { DailyProgressSyncModal } from './components/DailyProgressSyncModal';
+import { PrintableA4StudyDocketModal } from './components/PrintableA4StudyDocketModal';
+import { SeniorResourceLockerModal } from './components/SeniorResourceLockerModal';
+import { ExternalAIBridgeModal } from './components/ExternalAIBridgeModal';
+import { AcademicNoticeBoardModal } from './components/AcademicNoticeBoardModal';
 import { SyncInspectorModal, SyncInspectorDetails } from './components/SyncInspectorModal';
 import { BackupRestoreModal } from './components/BackupRestoreModal';
 import { StudyHabitsProgressView } from './components/StudyHabitsProgressView';
 import { DeviceTransferModal } from './components/DeviceTransferModal';
 import { WeeklyAIProgressReportModal } from './components/WeeklyAIProgressReportModal';
+import { RevisionBatchTriageModal } from './components/RevisionBatchTriageModal';
+import { EmergencyPreExamTriageModal } from './components/EmergencyPreExamTriageModal';
+import { InteractiveSocraticVivaModal } from './components/InteractiveSocraticVivaModal';
+import { BlurtingDiffCanvasModal } from './components/BlurtingDiffCanvasModal';
+import { WrongMCQAutopsyModal } from './components/WrongMCQAutopsyModal';
+import { CrossTopicMistakeSynthesizerModal } from './components/CrossTopicMistakeSynthesizerModal';
+import { PersonalBestsMilestonesView } from './components/PersonalBestsMilestonesView';
+import { StudyCockpitView } from './components/StudyCockpitView';
+import { SplitScreenCompanion } from './components/SplitScreenCompanion';
+import { ImmediateAlertHUD } from './components/ImmediateAlertHUD';
+import { NotificationDiagnosticModal } from './components/NotificationDiagnosticModal';
+import { AudioTranscriptionStudio } from './components/AudioTranscriptionStudio';
+import { 
+  pushMasterDataToBridge, 
+  pullMasterDataFromBridge, 
+  scheduleAutoDataBridgePush 
+} from './lib/dataBridgeService';
 import { loadAllHabitEntries } from './lib/habitService';
 import { 
   loadRPGProfile, 
@@ -199,6 +237,12 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isEmailAgendaModalOpen, setIsEmailAgendaModalOpen] = useState(false);
+  const [isGoogleChatModalOpen, setIsGoogleChatModalOpen] = useState(false);
+  const [isGoogleChatSidebarOpen, setIsGoogleChatSidebarOpen] = useState(false);
+  const [isSplitScreenOpen, setIsSplitScreenOpen] = useState(false);
+  const [isNotificationDiagnosticModalOpen, setIsNotificationDiagnosticModalOpen] = useState(false);
+  const [isTranscriptionStudioOpen, setIsTranscriptionStudioOpen] = useState(false);
+  const [isBridgeSyncing, setIsBridgeSyncing] = useState(false);
   const [isExamAutomationModalOpen, setIsExamAutomationModalOpen] = useState(false);
   const [isWorkspaceHubOpen, setIsWorkspaceHubOpen] = useState(false);
   const [isMaterialImportModalOpen, setIsMaterialImportModalOpen] = useState(false);
@@ -209,6 +253,14 @@ export default function App() {
   const [pendingScannedPayload, setPendingScannedPayload] = useState<any>(null);
   const [pendingTransferPin, setPendingTransferPin] = useState<string | undefined>(undefined);
   const [isQRScannerModalOpen, setIsQRScannerModalOpen] = useState(false);
+  const [isDailyProgressSyncModalOpen, setIsDailyProgressSyncModalOpen] = useState(false);
+  const [isPrintableDocketModalOpen, setIsPrintableDocketModalOpen] = useState(false);
+  const [isSeniorLockerModalOpen, setIsSeniorLockerModalOpen] = useState(false);
+  const [isExternalAIBridgeModalOpen, setIsExternalAIBridgeModalOpen] = useState(false);
+  const [externalAIBridgeInitialSubject, setExternalAIBridgeInitialSubject] = useState<string | undefined>(undefined);
+  const [externalAIBridgeInitialTopic, setExternalAIBridgeInitialTopic] = useState<string | undefined>(undefined);
+  const [externalAIBridgeInitialMistake, setExternalAIBridgeInitialMistake] = useState<any>(null);
+  const [isAcademicNoticeBoardModalOpen, setIsAcademicNoticeBoardModalOpen] = useState(false);
   const [isAIWeeklyReportModalOpen, setIsAIWeeklyReportModalOpen] = useState(false);
   const [studyHabits, setStudyHabits] = useState(() => loadAllHabitEntries());
   const [isPrintKitModalOpen, setIsPrintKitModalOpen] = useState(false);
@@ -225,6 +277,17 @@ export default function App() {
   const [drillTargetTopic, setDrillTargetTopic] = useState<string>('Core Concepts');
   const [feynmanInitialSubject, setFeynmanInitialSubject] = useState<string | undefined>(undefined);
   const [feynmanInitialConcept, setFeynmanInitialConcept] = useState<string | undefined>(undefined);
+  const [isRevisionBatchTriageOpen, setIsRevisionBatchTriageOpen] = useState(false);
+  const [isBlurtingDiffOpen, setIsBlurtingDiffOpen] = useState(false);
+  const [blurtingDiffInitialSubject, setBlurtingDiffInitialSubject] = useState<string | undefined>(undefined);
+  const [blurtingDiffInitialTopic, setBlurtingDiffInitialTopic] = useState<string | undefined>(undefined);
+  const [isSocraticVivaOpen, setIsSocraticVivaOpen] = useState(false);
+  const [socraticVivaInitialSubject, setSocraticVivaInitialSubject] = useState<string | undefined>(undefined);
+  const [socraticVivaInitialTopic, setSocraticVivaInitialTopic] = useState<string | undefined>(undefined);
+  const [isWrongMCQModalOpen, setIsWrongMCQModalOpen] = useState(false);
+  const [wrongMCQInitialSubject, setWrongMCQInitialSubject] = useState<string | undefined>(undefined);
+  const [wrongMCQInitialTopic, setWrongMCQInitialTopic] = useState<string | undefined>(undefined);
+  const [isCrossTopicModalOpen, setIsCrossTopicModalOpen] = useState(false);
   const [rpgProfile, setRpgProfile] = useState<StudyRPGProfile>(() => loadRPGProfile());
   const [audioStudyInitialDeckId, setAudioStudyInitialDeckId] = useState<string | undefined>(undefined);
   const [audioStudyInitialMode, setAudioStudyInitialMode] = useState<'voice_flashcards' | 'audio_podcast'>('voice_flashcards');
@@ -286,6 +349,9 @@ export default function App() {
   const [isCheatSheetModalOpen, setIsCheatSheetModalOpen] = useState(false);
   const [cheatSheetTopic, setCheatSheetTopic] = useState<{ subject?: string; topic?: string }>({});
 
+  // Global 24-Hour Pre-Exam Emergency Triage Desk modal state
+  const [isGlobalPreExamTriageOpen, setIsGlobalPreExamTriageOpen] = useState(false);
+
   // Active cross-device email key
   const [activeEmail, setActiveEmail] = useState<string>(() => getActiveUserEmail());
 
@@ -308,6 +374,16 @@ export default function App() {
 
   // Paired device UID override (from PIN / QR scan)
   const [pairedSyncUid, setPairedSyncUidState] = useState<string>(() => getPairedSyncUid());
+
+  // 1-3-7 Revision Due Cards Pipeline for Option 5 Batch Triage
+  const dueCards137 = useMemo(() => {
+    try {
+      const pipeline = build137RevisionPipeline(subjects, sessions, revisions, testResults);
+      return pipeline.filter(c => c.dueStatus === 'due_today' || c.dueStatus === 'overdue');
+    } catch {
+      return [];
+    }
+  }, [subjects, sessions, revisions, testResults]);
 
   // Calculate dynamic effective user ID for the current authenticated user or isolated guest
   const effectiveUid = pairedSyncUid || resolveActiveUserId(user, activeEmail || userProfile?.email || null);
@@ -345,6 +421,18 @@ export default function App() {
     );
   }, [userProfile?.email, userProfile?.examDates, subjects, revisions]);
 
+  // Sync Google Chat Webhook from user profile across devices and external browser windows
+  useEffect(() => {
+    if (userProfile?.googleChatWebhookUrl) {
+      const cfg = getGoogleChatConfig();
+      if (cfg.webhookUrl !== userProfile.googleChatWebhookUrl) {
+        cfg.webhookUrl = userProfile.googleChatWebhookUrl;
+        cfg.isConfigured = true;
+        saveGoogleChatConfig(cfg);
+      }
+    }
+  }, [userProfile?.googleChatWebhookUrl]);
+
   // Active Client-Side Native Web Push & Milestone Chime Scheduler
   useEffect(() => {
     const checkPush = () => {
@@ -368,6 +456,37 @@ export default function App() {
       clearInterval(interval);
     };
   }, [userProfile?.examDates, assignments, missedWork, plans]);
+
+  // Automated Google Chat Dispatch Scheduler (Morning Plan, Evening Audit, and Gemini Inactivity Reality Checks)
+  useEffect(() => {
+    const runGoogleChatCheck = async () => {
+      try {
+        const res = await checkAndTriggerGoogleChatAutomatedDispatches({
+          sessions,
+          plans,
+          revisions,
+          userProfile,
+          subjects,
+          mistakes: loadMistakes()
+        });
+        if (res.triggered && res.message) {
+          setActionBanner({
+            message: `💬 Google Chat: ${res.message}`,
+            type: 'info'
+          });
+        }
+      } catch (e) {
+        console.warn('Google Chat automated dispatcher error:', e);
+      }
+    };
+
+    const bootTimer = setTimeout(runGoogleChatCheck, 3500);
+    const interval = setInterval(runGoogleChatCheck, 60000);
+    return () => {
+      clearTimeout(bootTimer);
+      clearInterval(interval);
+    };
+  }, [sessions, plans, revisions, userProfile, subjects]);
 
   // Listen for Service Worker background push action clicks ([Start 25m Timer], [Mark Done])
   useEffect(() => {
@@ -493,6 +612,110 @@ export default function App() {
     }
   }, []);
 
+  // Universal Cross-Screen & Builder App Master Study Data Synchronization
+  useEffect(() => {
+    let sse: EventSource | null = null;
+
+    const syncFromMasterBridge = async () => {
+      try {
+        const res = await pullMasterDataFromBridge();
+        if (res.success && res.hasData && res.data) {
+          const master = res.data;
+          if (Array.isArray(master.sessions) && master.sessions.length > 0) {
+            setSessions(prev => {
+              const map = new Map(prev.map(s => [s.id, s]));
+              master.sessions?.forEach(s => map.set(s.id, s));
+              const merged = Array.from(map.values());
+              saveLocalState('sessions', merged);
+              return merged;
+            });
+          }
+          if (Array.isArray(master.subjects) && master.subjects.length > 0) {
+            setSubjects(master.subjects);
+            saveLocalState('syllabus', master.subjects);
+          }
+          if (Array.isArray(master.revisions) && master.revisions.length > 0) {
+            setRevisions(master.revisions);
+            saveLocalState('revisions', master.revisions);
+          }
+          if (Array.isArray(master.plans) && master.plans.length > 0) {
+            setPlans(master.plans);
+            saveLocalState('plans', master.plans);
+          }
+          if (Array.isArray(master.notes) && master.notes.length > 0) {
+            setNotes(master.notes);
+            saveLocalState('notes', master.notes);
+          }
+        }
+      } catch (e) {
+        console.warn('Master bridge initial pull failed:', e);
+      }
+    };
+
+    syncFromMasterBridge();
+
+    // Listen to local & SSE events from other tabs or builder app
+    const handleBridgeUpdatedEvent = () => syncFromMasterBridge();
+    window.addEventListener('studyplanner:data-bridge-updated', handleBridgeUpdatedEvent);
+
+    try {
+      sse = new EventSource('/api/sync/events?deviceName=MasterBridgeClient');
+      sse.addEventListener('master_bridge_update', () => {
+        syncFromMasterBridge();
+      });
+    } catch (e) {}
+
+    return () => {
+      window.removeEventListener('studyplanner:data-bridge-updated', handleBridgeUpdatedEvent);
+      if (sse) sse.close();
+    };
+  }, []);
+
+  // Automatically keep Master Data Bridge synchronized on state changes
+  useEffect(() => {
+    scheduleAutoDataBridgePush(() => ({
+      subjects,
+      sessions,
+      plans,
+      revisions,
+      notes,
+      userProfile
+    }), 4000);
+  }, [subjects, sessions, plans, revisions, notes, userProfile]);
+
+  // Manual 1-click Link & Force Sync handler for Navbar & Diagnostics
+  const handleSyncDataBridge = async () => {
+    setIsBridgeSyncing(true);
+    try {
+      const res = await pushMasterDataToBridge({
+        subjects,
+        sessions,
+        plans,
+        revisions,
+        notes,
+        userProfile
+      });
+      if (res.success) {
+        setActionBanner({
+          message: '⚡ Master study data & timer successfully linked and synced between external screen & builder app!',
+          type: 'success'
+        });
+      } else {
+        setActionBanner({
+          message: `Sync details: ${res.message}`,
+          type: 'info'
+        });
+      }
+    } catch (err: any) {
+      setActionBanner({
+        message: `Sync failed: ${err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setIsBridgeSyncing(false);
+    }
+  };
+
   // Handle URL action parameters from actionable Gmail links (Mark as done, Start timer, Open Briefing)
   useEffect(() => {
     try {
@@ -566,20 +789,23 @@ export default function App() {
 
         // Clean query parameters from URL without reloading
         window.history.replaceState({}, document.title, window.location.pathname);
-      } else if (action === 'start_timer') {
-        if (topicParam || subjectParam) {
-          setTimerTopic({
-            subject: subjectParam || '',
-            chapter: chapterParam || '',
-            topic: topicParam || ''
-          });
-          setActiveTab('timer');
-          setActionBanner({
-            message: `⏱️ Timer initiated for "${topicParam || 'Study Topic'}" (${subjectParam || ''}) from your Morning Briefing.`,
-            type: 'info'
-          });
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
+      } else if (action === 'start_timer' || action === 'timer') {
+        const durationParam = urlParams.get('duration');
+        const dur = durationParam ? parseInt(durationParam, 10) : 25;
+        setTimerTopic({
+          subject: subjectParam || '',
+          chapter: chapterParam || '',
+          topic: topicParam || '',
+          durationMinutes: isNaN(dur) ? 25 : dur
+        });
+        setActiveTab('timer');
+        setActionBanner({
+          message: topicParam 
+            ? `⏱️ Focus timer initiated for "${topicParam}" (${subjectParam || 'Study Session'}) from Google Chat.`
+            : `⏱️ Focus study timer ready (${isNaN(dur) ? 25 : dur} mins)!`,
+          type: 'info'
+        });
+        window.history.replaceState({}, document.title, window.location.pathname);
       } else if (action === 'open_morning_briefing' || action === 'briefing') {
         setIsEmailAgendaModalOpen(true);
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -598,6 +824,72 @@ export default function App() {
       } catch (hErr) {}
 
       const getParam = (key: string) => urlParams.get(key) || (hashParams ? hashParams.get(key) : null);
+
+      // 0. Direct Daily Study Progress Transfer via URL Link / QR Code
+      const actionParam = getParam('action');
+      const hashRaw = window.location.hash;
+      const dailyDataParam = getParam('daily_data') || (hashRaw.includes('daily_data=') ? hashRaw.split('daily_data=')[1].split('&')[0] : null);
+      const hoursParam = getParam('today_hours') || getParam('hours');
+      const minsParam = getParam('today_minutes') || getParam('mins');
+
+      if (actionParam === 'daily_sync' || dailyDataParam || (hoursParam && minsParam)) {
+        try {
+          let incomingData: any = null;
+          if (dailyDataParam) {
+            try {
+              incomingData = JSON.parse(decodeURIComponent(escape(atob(dailyDataParam))));
+            } catch (dErr) {
+              console.warn('Could not decode daily_data hash:', dErr);
+            }
+          }
+          if (!incomingData && (hoursParam || minsParam)) {
+            const h = Number(hoursParam || 0);
+            const m = Number(minsParam || (h * 60));
+            const todayStr = new Date().toISOString().split('T')[0];
+            incomingData = {
+              type: 'DAILY_PROGRESS_TRANSFER',
+              todayHours: h,
+              todayMinutes: m,
+              date: todayStr,
+              studyStreak: Number(getParam('streak') || 1),
+              sessions: [{
+                id: `sync-session-${Date.now()}`,
+                subjectName: 'Study Session',
+                topicName: 'Synchronized Study Hours',
+                durationMinutes: m,
+                date: todayStr,
+                notes: 'Delivered study time transferred from other device'
+              }]
+            };
+          }
+
+          if (incomingData) {
+            if (Array.isArray(incomingData.sessions) && incomingData.sessions.length > 0) {
+              const existingIds = new Set(sessions.map(s => s.id));
+              const newSessions = incomingData.sessions.filter((s: any) => !existingIds.has(s.id));
+              if (newSessions.length > 0) {
+                const merged = [...newSessions, ...sessions];
+                setSessions(merged);
+                saveLocalState('sessions', merged);
+                for (const ns of newSessions) {
+                  addStudySessionToDb(effectiveUid, ns).catch(() => {});
+                }
+              }
+            }
+            if (incomingData.studyStreak && (!userProfile?.studyStreak || incomingData.studyStreak > userProfile.studyStreak)) {
+              handleUpdateProfile({ studyStreak: incomingData.studyStreak });
+            }
+            const hoursVal = incomingData.todayHours || (incomingData.todayMinutes / 60).toFixed(1);
+            setActionBanner({
+              message: `⚡ Transferred today's study progress: ${hoursVal} hrs delivered! Ready to email your daily summary.`,
+              type: 'success'
+            });
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        } catch (e) {
+          console.warn('Error processing daily_sync URL params:', e);
+        }
+      }
 
       const transferCodeParam = getParam('transfer_code') || getParam('connect_code') || getParam('pin') || getParam('code') || getParam('link_pin');
       const syncEmailParam = getParam('sync_email') || getParam('email');
@@ -636,7 +928,32 @@ export default function App() {
               }
 
               if (res.payload) {
-                await handleRestoreFullSnapshot(res.payload, targetUid || effectiveUid);
+                if (res.payload.type === 'DAILY_PROGRESS_TRANSFER' || res.payload.todayMinutes !== undefined) {
+                  const incoming = res.payload;
+                  if (Array.isArray(incoming.sessions) && incoming.sessions.length > 0) {
+                    const existingIds = new Set(sessions.map(s => s.id));
+                    const newSessions = incoming.sessions.filter((s: any) => !existingIds.has(s.id));
+                    if (newSessions.length > 0) {
+                      const merged = [...newSessions, ...sessions];
+                      setSessions(merged);
+                      saveLocalState('sessions', merged);
+                      for (const ns of newSessions) {
+                        await addStudySessionToDb(effectiveUid, ns);
+                      }
+                    }
+                  }
+                  if (incoming.studyStreak && (!userProfile?.studyStreak || incoming.studyStreak > userProfile.studyStreak)) {
+                    handleUpdateProfile({ studyStreak: incoming.studyStreak });
+                  }
+                  setActionBanner({
+                    message: `⚡ Transferred today's study progress: ${(incoming.todayMinutes / 60).toFixed(1)} hrs delivered! Ready to email your daily summary.`,
+                    type: 'success'
+                  });
+                  window.history.replaceState({}, document.title, window.location.pathname);
+                  return;
+                } else {
+                  await handleRestoreFullSnapshot(res.payload, targetUid || effectiveUid);
+                }
               }
 
               setActionBanner({
@@ -647,6 +964,42 @@ export default function App() {
               });
               window.history.replaceState({}, document.title, window.location.pathname);
             } else {
+              const fallbackUid = getParam('sync_uid');
+              const fallbackEmail = syncEmailParam;
+              if (fallbackUid || fallbackEmail) {
+                const targetUid = fallbackUid || resolveActiveUserId(null, fallbackEmail);
+                if (targetUid) {
+                  setPairedSyncUid(targetUid);
+                  setPairedSyncUidState(targetUid);
+                }
+                if (fallbackEmail) {
+                  setActiveUserEmail(fallbackEmail);
+                  setActiveEmail(fallbackEmail);
+                  handleUpdateProfile({ email: fallbackEmail });
+                }
+                pullFullCloudSnapshot(targetUid || effectiveUid).then(async (pullRes) => {
+                  if (pullRes.success && pullRes.snapshot) {
+                    await handleRestoreFullSnapshot(pullRes.snapshot, targetUid || effectiveUid);
+                    setActionBanner({
+                      message: `🎉 Connected via QR Code! Synced with your account and imported ${pullRes.stats.subjectsCount} subjects & ${pullRes.stats.plansCount} calendar plans.`,
+                      type: 'success'
+                    });
+                  } else {
+                    setActionBanner({
+                      message: `Linked device via QR Code with account ${fallbackEmail || targetUid}!`,
+                      type: 'success'
+                    });
+                  }
+                }).catch(() => {
+                  setActionBanner({
+                    message: `Linked device via QR Code with account ${fallbackEmail || targetUid}!`,
+                    type: 'success'
+                  });
+                });
+                window.history.replaceState({}, document.title, window.location.pathname);
+                return;
+              }
+
               setActionBanner({
                 message: res.message || `Could not link device using PIN ${cleanPin}. Please check the PIN.`,
                 type: 'error'
@@ -700,8 +1053,13 @@ export default function App() {
         setActiveUserEmail(data.profile.email);
       }
     }
-    cacheAllDataLocally(data);
-    await forceSyncAllToCloud(destUid, data);
+    const effectiveSubjects = (Array.isArray(data.subjects) && data.subjects.length > 0) ? data.subjects : subjects;
+    const safeData = {
+      ...data,
+      subjects: effectiveSubjects
+    };
+    cacheAllDataLocally(safeData);
+    await forceSyncAllToCloud(destUid, safeData);
   };
 
   // Rollback to Pre-Sync Safety Backup if user wants to undo
@@ -746,32 +1104,128 @@ export default function App() {
   const handleQRScanResult = async (result: ParsedQRResult) => {
     if (!result) return;
 
+    // Immediately dismiss the optical camera scanner modal so it does not block the screen
+    setIsQRScannerModalOpen(false);
+
     // 1. Device Pairing / Transfer PIN - Safe Preview Diff Mode
     if (result.type === 'transfer_pin' || result.transferPin) {
       const pin = result.transferPin || result.raw.replace(/[^0-9]/g, '').slice(0, 6);
       if (pin && pin.length === 6) {
         try {
           const res = await redeemTransferPin(pin, { forcePull: true });
-          if (res.success && res.payload) {
-            setPendingTransferPin(pin);
-            setPendingScannedPayload({
-              ...res.payload,
-              deviceName: res.deviceName || 'Remote Device',
-              uid: res.uid,
-              email: res.email
-            });
-            setIsDeviceTransferModalOpen(true);
-            return;
-          } else {
-            setPendingTransferPin(pin);
-            setIsDeviceTransferModalOpen(true);
-            return;
+          let payloadToUse = res.payload;
+
+          // If payload is empty or not on document, pull from Cloud snapshot via UID
+          const targetUid = res.uid || result.syncUid;
+          if ((!payloadToUse || !Array.isArray(payloadToUse.subjects) || payloadToUse.subjects.length === 0) && targetUid) {
+            const cloudPull = await pullFullCloudSnapshot(targetUid);
+            if (cloudPull.success && cloudPull.snapshot) {
+              payloadToUse = cloudPull.snapshot;
+            }
           }
+
+          setPendingTransferPin(pin);
+          if (payloadToUse) {
+            setPendingScannedPayload({
+              ...payloadToUse,
+              deviceName: res.deviceName || 'Remote Device',
+              uid: targetUid,
+              email: res.email || result.syncEmail
+            });
+          }
+          setIsDeviceTransferModalOpen(true);
+          return;
         } catch (err: any) {
+          console.warn('QR PIN analyze fallback:', err);
           setPendingTransferPin(pin);
           setIsDeviceTransferModalOpen(true);
           return;
         }
+      }
+    }
+
+    // 1b. Daily Study Progress & Hours Transfer (Sync today's study hours, streak, sessions across phone & PC)
+    if (result.type === 'daily_progress' && result.data) {
+      const incoming = result.data;
+      try {
+        let importedSessions = 0;
+        if (Array.isArray(incoming.sessions) && incoming.sessions.length > 0) {
+          const existingIds = new Set(sessions.map(s => s.id));
+          const newSessions: StudySession[] = incoming.sessions
+            .filter((s: any) => !existingIds.has(s.id))
+            .map((s: any) => ({
+              ...s,
+              id: s.id || `sess-sync-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`
+            }));
+          if (newSessions.length > 0) {
+            const merged = [...newSessions, ...sessions];
+            setSessions(merged);
+            saveLocalState('sessions', merged);
+            for (const ns of newSessions) {
+              await addStudySessionToDb(effectiveUid, ns);
+            }
+            importedSessions = newSessions.length;
+          }
+        } else if (incoming.todayMinutes > 0 || incoming.todayHours > 0) {
+          const m = Number(incoming.todayMinutes || Math.round(incoming.todayHours * 60));
+          const todayStr = new Date().toISOString().split('T')[0];
+          const synthSession: StudySession = {
+            id: `sess-sync-${Date.now()}`,
+            userId: effectiveUid,
+            subjectName: 'Study Session',
+            chapterName: 'General Review',
+            topicName: 'Delivered Study Hours',
+            durationMinutes: m,
+            startTime: '09:00',
+            endTime: '10:00',
+            date: todayStr,
+            result: 'Completed',
+            timestamp: Date.now(),
+            notes: 'Delivered study time transferred from other device via QR Code'
+          };
+          const merged = [synthSession, ...sessions];
+          setSessions(merged);
+          saveLocalState('sessions', merged);
+          await addStudySessionToDb(effectiveUid, synthSession);
+          importedSessions = 1;
+        }
+
+        if (incoming.studyStreak && (!userProfile?.studyStreak || incoming.studyStreak > userProfile.studyStreak)) {
+          handleUpdateProfile({ studyStreak: incoming.studyStreak });
+        }
+
+        if (Array.isArray(incoming.plans) && incoming.plans.length > 0) {
+          const mergedPlans = [...plans];
+          let updatedPlanCount = 0;
+          incoming.plans.forEach((inPlan: any) => {
+            const idx = mergedPlans.findIndex(p => p.id === inPlan.id || (p.date && p.date === inPlan.date));
+            if (idx >= 0) {
+              mergedPlans[idx] = { ...mergedPlans[idx], ...inPlan };
+              updatedPlanCount++;
+            } else {
+              mergedPlans.push(inPlan);
+              updatedPlanCount++;
+            }
+          });
+          if (updatedPlanCount > 0) {
+            setPlans(mergedPlans);
+            saveLocalState('plans', mergedPlans);
+            await batchSaveStudyPlansToDb(effectiveUid, mergedPlans);
+          }
+        }
+
+        const totalHours = ((incoming.todayMinutes || 0) / 60).toFixed(1);
+        setActionBanner({
+          message: `⚡ Daily Progress Synced! Transferred today's study records (${totalHours}h logged, ${importedSessions} sessions). Both devices are aligned!`,
+          type: 'success'
+        });
+        return;
+      } catch (err: any) {
+        setActionBanner({
+          message: `Failed to merge daily progress: ${err.message}`,
+          type: 'error'
+        });
+        return;
       }
     }
 
@@ -1742,14 +2196,57 @@ export default function App() {
   };
 
   const handleSavePlan = async (plan: StudyPlan | Omit<StudyPlan, 'id'>) => {
-    if ('id' in plan && plan.id && plans.some(p => p.id === plan.id)) {
-      await updateStudyPlanInDb(effectiveUid, plan.id, plan);
-      setPlans(prev => prev.map(p => p.id === plan.id ? { ...p, ...plan } : p));
-    } else {
-      const planId = await saveStudyPlanToDb(effectiveUid, plan);
-      const newPlan: StudyPlan = { id: planId || `plan-${Date.now()}`, ...plan };
-      setPlans(prev => [newPlan, ...prev.filter(p => p.id !== newPlan.id)]);
+    const rawId = ('id' in plan && plan.id) ? plan.id : `plan-${(plan as any).date || 'today'}-${Date.now()}`;
+    const rawPlan: StudyPlan = { id: rawId, ...plan };
+
+    // Inbuilt Calendar Analyzer: converts analyzed topics into definitive In-App Calendar Events
+    const { plan: analyzedPlan } = analyzeStudyPlanIntoCalendar(rawPlan);
+
+    // Optimistically update plans state immediately for 0ms instant calendar addition
+    setPlans(prev => {
+      // Find matching plan either by exact id or by unique target date
+      const matchIdx = prev.findIndex(p => p.id === analyzedPlan.id || (Boolean(analyzedPlan.date) && p.date === analyzedPlan.date));
+      if (matchIdx >= 0) {
+        const next = [...prev];
+        next[matchIdx] = analyzedPlan;
+        // Strip any residual duplicate with same date
+        return next.filter((p, i) => i === matchIdx || !analyzedPlan.date || p.date !== analyzedPlan.date);
+      }
+      return [analyzedPlan, ...prev.filter(p => !analyzedPlan.date || p.date !== analyzedPlan.date)];
+    });
+
+    try {
+      const planAlreadyExists = plans.some(p => p.id === analyzedPlan.id || (analyzedPlan.date && p.date === analyzedPlan.date));
+      if (planAlreadyExists) {
+        await updateStudyPlanInDb(effectiveUid, analyzedPlan.id, analyzedPlan);
+      } else {
+        const planId = await saveStudyPlanToDb(effectiveUid, analyzedPlan);
+        if (planId && planId !== analyzedPlan.id) {
+          setPlans(prev => prev.map(p => (p.id === analyzedPlan.id || (analyzedPlan.date && p.date === analyzedPlan.date)) ? { ...p, id: planId } : p));
+        }
+      }
+    } catch (e) {
+      console.warn('Background save plan warning:', e);
     }
+  };
+
+  /**
+   * Atomic batch plan saver: Handles bulk allocation (e.g. 108 topics, multi-month sprints)
+   * Converts all plans through Inbuilt Calendar Analyzer into definitive In-App Calendar Events.
+   */
+  const handleBatchSavePlans = async (newPlans: Array<StudyPlan | Omit<StudyPlan, 'id'>>) => {
+    const analyzedBatch = newPlans.map((p, idx) => {
+      const rawId = ('id' in p && p.id) ? p.id : `plan-${(p as any).date || 'today'}-${Date.now()}-${idx}`;
+      const { plan: analyzed } = analyzeStudyPlanIntoCalendar({ id: rawId, ...p });
+      return analyzed;
+    });
+
+    const updated = await batchSaveStudyPlansToDb(effectiveUid, analyzedBatch);
+    setPlans(updated);
+    setActionBanner({
+      message: `📅 Inbuilt Calendar Analyzer converted & scheduled ${analyzedBatch.reduce((sum, p) => sum + (p.calendarEvents?.length || p.topics.length), 0)} study session(s) into your Inbuilt Calendar!`,
+      type: 'success'
+    });
   };
 
   const handleForceSaveCloud = async () => {
@@ -2031,15 +2528,38 @@ export default function App() {
             return t;
           });
 
-          updateStudyPlanInDb(effectiveUid, planId, { topics: updatedTopics }).catch(err => {
+          const updatedEvents = (plan.calendarEvents || []).map(evt => {
+            if (evt.planTopicId === topicId || (targetTopic && evt.id === targetTopic.calendarEventId)) {
+              return {
+                ...evt,
+                completed: nextCompletedState,
+                completedAt: nextCompletedState ? (evt.completedAt || new Date().toISOString()) : undefined
+              };
+            }
+            return evt;
+          });
+
+          updateStudyPlanInDb(effectiveUid, planId, { topics: updatedTopics, calendarEvents: updatedEvents }).catch(err => {
             console.warn('Error updating plan topic completion in DB:', err);
           });
 
-          return { ...plan, topics: updatedTopics };
+          return { ...plan, topics: updatedTopics, calendarEvents: updatedEvents };
         }
         return plan;
       });
     });
+
+    // Synchronize completion to Google Tasks for external Zapier/Gmail accountability
+    if (targetTopic?.googleTaskId || targetTopic?.calendarEventId) {
+      const pseudoEvent: any = {
+        id: targetTopic.calendarEventId || `cal-evt-${planId}-${topicId}`,
+        googleTaskId: targetTopic.googleTaskId,
+        googleCalendarEventId: targetTopic.googleCalendarEventId
+      };
+      toggleInAppEventCompletionExternal(pseudoEvent, nextCompletedState).catch(err => {
+        console.warn('Failed to update Google Task completion status:', err);
+      });
+    }
 
     // If marked as completed, update syllabus topic status, add revisions if needed, & log study session/activity
     if (targetTopic && nextCompletedState) {
@@ -2413,6 +2933,11 @@ export default function App() {
         onOpenQuickTimer={() => setActiveTab('timer')}
         onOpenExamAutomationModal={() => setIsExamAutomationModalOpen(true)}
         onOpenEmailAgendaModal={() => setIsEmailAgendaModalOpen(true)}
+        onOpenGoogleChat={() => setIsGoogleChatSidebarOpen(true)}
+        onOpenNotificationDiagnostics={() => setIsNotificationDiagnosticModalOpen(true)}
+        onOpenTranscriptionStudio={() => setIsTranscriptionStudioOpen(true)}
+        onSyncDataBridge={handleSyncDataBridge}
+        isBridgeSyncing={isBridgeSyncing}
         onOpenWhatsAppModal={() => setIsWhatsAppModalOpen(true)}
         onOpenVoiceFeynman={() => {
           setFeynmanInitialSubject(undefined);
@@ -2437,6 +2962,34 @@ export default function App() {
         onOpenRetentionGraph={() => setIsRetentionGraphModalOpen(true)}
         onOpenMorningWarmup={() => setIsMorningWarmupModalOpen(true)}
         onOpenBackupRestore={() => setIsBackupRestoreModalOpen(true)}
+        onOpenExternalAIBridge={() => {
+          setExternalAIBridgeInitialSubject(undefined);
+          setExternalAIBridgeInitialTopic(undefined);
+          setExternalAIBridgeInitialMistake(null);
+          setIsExternalAIBridgeModalOpen(true);
+        }}
+        onOpenNoticeBoard={() => setIsAcademicNoticeBoardModalOpen(true)}
+        onOpenRevisionBatchTriage={() => setIsRevisionBatchTriageOpen(true)}
+        onOpenMCQAutopsy={(sub, top) => {
+          setWrongMCQInitialSubject(sub);
+          setWrongMCQInitialTopic(top);
+          setIsWrongMCQModalOpen(true);
+        }}
+        onOpenBlurtingDiffCanvas={(sub, top) => {
+          setBlurtingDiffInitialSubject(sub);
+          setBlurtingDiffInitialTopic(top);
+          setIsBlurtingDiffOpen(true);
+        }}
+        onOpenCrossTopicSynthesizer={() => setIsCrossTopicModalOpen(true)}
+        onOpenSocraticViva={(sub, top) => {
+          setSocraticVivaInitialSubject(sub);
+          setSocraticVivaInitialTopic(top);
+          setIsSocraticVivaOpen(true);
+        }}
+        onOpenDailyProgressSync={() => setIsDailyProgressSyncModalOpen(true)}
+        onOpenPrintableDocket={() => setIsPrintableDocketModalOpen(true)}
+        onOpenSeniorLocker={() => setIsSeniorLockerModalOpen(true)}
+        onOpenPreExamTriage={() => setIsGlobalPreExamTriageOpen(true)}
         onForceSaveCloud={handleForceSaveCloud}
         onSignOut={handleSignOut}
       />
@@ -2526,6 +3079,8 @@ export default function App() {
             missedWork={missedWork}
             userProfile={userProfile}
             setActiveTab={setActiveTab}
+            onSaveSession={handleSaveSession}
+            onOpenGoogleCalendarSync={() => setActiveTab('calendar')}
             onStartTimerForTopic={handleStartTimerForTopic}
             onStartBlurtForTopic={handleStartBlurtForTopic}
             onStartTimerForAssignment={handleStartTimerForAssignment}
@@ -2535,6 +3090,8 @@ export default function App() {
             onTogglePlanTopic={handleTogglePlanTopicComplete}
             onOpenExamAutomationModal={() => setIsExamAutomationModalOpen(true)}
             onOpenEmailAgendaModal={() => setIsEmailAgendaModalOpen(true)}
+            onOpenGoogleChat={() => setIsGoogleChatSidebarOpen(true)}
+            onOpenGoogleChatSidebar={() => setIsGoogleChatSidebarOpen(true)}
             onOpenWhatsAppModal={() => setIsWhatsAppModalOpen(true)}
             onOpenVoiceFeynman={() => {
               setFeynmanInitialSubject(undefined);
@@ -2555,6 +3112,34 @@ export default function App() {
             onOpenCheatSheet={(subj, top) => {
               setCheatSheetTopic({ subject: subj, topic: top });
               setIsCheatSheetModalOpen(true);
+            }}
+            onOpenDailyProgressSync={() => setIsDailyProgressSyncModalOpen(true)}
+            onOpenPrintableDocket={() => setIsPrintableDocketModalOpen(true)}
+            onOpenSeniorLocker={() => setIsSeniorLockerModalOpen(true)}
+            onOpenQRScanner={() => setIsQRScannerModalOpen(true)}
+            onOpenExternalAIBridge={(subId, topName) => {
+              setExternalAIBridgeInitialSubject(subId);
+              setExternalAIBridgeInitialTopic(topName);
+              setExternalAIBridgeInitialMistake(null);
+              setIsExternalAIBridgeModalOpen(true);
+            }}
+            onOpenNoticeBoard={() => setIsAcademicNoticeBoardModalOpen(true)}
+            onOpenRevisionBatchTriage={() => setIsRevisionBatchTriageOpen(true)}
+            onOpenWrongMCQAutopsy={(sub, top) => {
+              setWrongMCQInitialSubject(sub);
+              setWrongMCQInitialTopic(top);
+              setIsWrongMCQModalOpen(true);
+            }}
+            onOpenBlurtingDiffCanvas={(sub, top) => {
+              setBlurtingDiffInitialSubject(sub);
+              setBlurtingDiffInitialTopic(top);
+              setIsBlurtingDiffOpen(true);
+            }}
+            onOpenCrossTopicSynthesizer={() => setIsCrossTopicModalOpen(true)}
+            onOpenSocraticViva={(sub, top) => {
+              setSocraticVivaInitialSubject(sub);
+              setSocraticVivaInitialTopic(top);
+              setIsSocraticVivaOpen(true);
             }}
             onUpdateTopicStatus={async (subjectName, topicName, status) => {
               const subClean = (subjectName || '').toLowerCase();
@@ -2588,6 +3173,7 @@ export default function App() {
             revisions={revisions}
             plans={plans}
             assignments={assignments}
+            flashcardDecks={flashcardDecks}
             targetStudyHours={userProfile?.targetHoursPerDay || 3}
             onNavigateTab={setActiveTab}
             onStartTimer={() => setActiveTab('timer')}
@@ -2595,6 +3181,38 @@ export default function App() {
             onOpenMistakeVault={() => setActiveTab('mistake_vault')}
             onOpenTests={() => setActiveTab('tests')}
             onOpenAIWeeklyReport={() => setIsAIWeeklyReportModalOpen(true)}
+            onOpenSplitScreen={() => setIsSplitScreenOpen(true)}
+          />
+        )}
+
+        {activeTab === 'study_cockpit' && (
+          <StudyCockpitView
+            sessions={sessions}
+            plans={plans}
+            revisions={revisions}
+            userProfile={userProfile}
+            subjects={subjects}
+            onStartTimerForTopic={handleStartTimerForTopic}
+            onSaveCompletedSession={(subject, topic, minutes) => {
+              handleSaveSession({
+                userId: user?.uid || 'guest',
+                subjectName: subject,
+                topicName: topic,
+                chapterName: 'Study Sprint',
+                durationMinutes: minutes,
+                date: new Date().toISOString().split('T')[0],
+                startTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                endTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                result: 'Completed',
+                timestamp: Date.now()
+              });
+            }}
+            onNavigateTab={setActiveTab}
+            onOpenSplitScreen={() => setIsSplitScreenOpen(true)}
+            onOpenNotificationDiagnostics={() => setIsNotificationDiagnosticModalOpen(true)}
+            onOpenTranscriptionStudio={() => setIsTranscriptionStudioOpen(true)}
+            onSyncDataBridge={handleSyncDataBridge}
+            isBridgeSyncing={isBridgeSyncing}
           />
         )}
 
@@ -2710,6 +3328,7 @@ export default function App() {
               setIsAudioStudyModalOpen(true);
             }}
             onOpenPrintKit={() => setIsPrintKitModalOpen(true)}
+            onSaveSession={handleSaveSession}
           />
         )}
 
@@ -2797,6 +3416,7 @@ export default function App() {
             onAddTo137Cycle={handleAdd137RevisionCycle}
             userProfile={userProfile}
             sessions={sessions}
+            plans={plans}
             user={user}
             notes={notes}
             onLogActivity={handleAddActivityLog}
@@ -2843,8 +3463,18 @@ export default function App() {
             userProfile={userProfile}
             subjects={subjects}
             onSavePlan={handleSavePlan}
+            onBatchSavePlans={handleBatchSavePlans}
+            onAddTo137Cycle={(subj, chap, top, initDate) => {
+              handleAdd137RevisionCycle({
+                subjectName: subj,
+                chapterName: chap,
+                topicName: top,
+                studyDate: initDate
+              });
+            }}
             onUpdateProfile={handleUpdateProfile}
             onStartTimerForTopic={handleStartTimerForTopic}
+            onToggleTopicCompletion={handleTogglePlanTopicComplete}
             setActiveTab={setActiveTab}
             onOpenWorkspaceHub={(tab) => {
               if (tab) setWorkspaceHubTab(tab);
@@ -2877,6 +3507,7 @@ export default function App() {
             onAddRevisionTopic={handleAddRevisionTopic}
             onRescheduleRevision={handleRescheduleRevision}
             onNavigateTab={setActiveTab}
+            onUpdateSubjects={handleUpdateSubjects}
           />
         )}
 
@@ -2902,6 +3533,7 @@ export default function App() {
               setCheatSheetTopic({ subject: subj, topic: top });
               setIsCheatSheetModalOpen(true);
             }}
+            onOpenBatchTriage={() => setIsRevisionBatchTriageOpen(true)}
           />
         )}
 
@@ -2920,6 +3552,21 @@ export default function App() {
             setActiveTab={setActiveTab}
             onSendPromptToTutor={handleSendPromptToTutor}
             onSelectTopicInSyllabus={() => setActiveTab('syllabus')}
+          />
+        )}
+
+        {activeTab === 'test_prep' && (
+          <TestPreparationView
+            subjects={subjects}
+            testResults={testResults}
+            plans={plans}
+            sessions={sessions}
+            examDates={userProfile?.examDates || []}
+            userProfile={userProfile}
+            onAddTestResult={handleAddTestResult}
+            onStartTimerForTopic={handleStartTimerForTopic}
+            onNavigateTab={setActiveTab}
+            onSavePlan={handleSavePlan}
           />
         )}
 
@@ -3002,6 +3649,23 @@ export default function App() {
             }}
             onAwardXP={handleAwardXP}
             onSaveTestResult={handleAddTestResult}
+            onAddTo137Cycle={handleAdd137RevisionCycle}
+            onOpenExternalAIBridge={(subId, topName, mistake) => {
+              setExternalAIBridgeInitialSubject(subId);
+              setExternalAIBridgeInitialTopic(topName);
+              setExternalAIBridgeInitialMistake(mistake);
+              setIsExternalAIBridgeModalOpen(true);
+            }}
+          />
+        )}
+
+        {activeTab === 'personal_bests' && (
+          <PersonalBestsMilestonesView
+            subjects={subjects}
+            testResults={testResults}
+            sessions={sessions}
+            onNavigateTab={setActiveTab}
+            onStartTimerForTopic={handleStartTimerForTopic}
           />
         )}
 
@@ -3228,7 +3892,7 @@ export default function App() {
           setPendingTransferPin(undefined);
         }}
         localDataset={{
-          profile: userProfile,
+          profile: userProfile ? { ...userProfile, uid: effectiveUid, email: activeEmail || userProfile.email || '' } : { uid: effectiveUid, email: activeEmail, displayName: 'Student' } as any,
           subjects,
           sessions,
           plans,
@@ -3507,6 +4171,378 @@ export default function App() {
               ? '🎯 Autonomous Server Push Notification Dispatched!' 
               : `Push notification error: ${res.message}`,
             type: res.success ? 'success' : 'error'
+          });
+        }}
+        onOpenPreExamTriage={() => setIsGlobalPreExamTriageOpen(true)}
+        onOpenRevisionBatchTriage={() => setIsRevisionBatchTriageOpen(true)}
+        onOpenMCQAutopsy={(sub, top) => {
+          setWrongMCQInitialSubject(sub);
+          setWrongMCQInitialTopic(top);
+          setIsWrongMCQModalOpen(true);
+        }}
+        onOpenBlurtingDiff={(sub, top) => {
+          setBlurtingDiffInitialSubject(sub);
+          setBlurtingDiffInitialTopic(top);
+          setIsBlurtingDiffOpen(true);
+        }}
+        onOpenCrossTopicSynthesizer={() => setIsCrossTopicModalOpen(true)}
+        onOpenSocraticViva={(sub, top) => {
+          setSocraticVivaInitialSubject(sub);
+          setSocraticVivaInitialTopic(top);
+          setIsSocraticVivaOpen(true);
+        }}
+        onOpenDailyProgressSync={() => setIsDailyProgressSyncModalOpen(true)}
+        onOpenPrintableDocket={() => setIsPrintableDocketModalOpen(true)}
+        onOpenSeniorLocker={() => setIsSeniorLockerModalOpen(true)}
+        onOpenExternalAIBridge={(sub, top, m) => {
+          setExternalAIBridgeInitialSubject(sub);
+          setExternalAIBridgeInitialTopic(top);
+          setExternalAIBridgeInitialMistake(m);
+          setIsExternalAIBridgeModalOpen(true);
+        }}
+        onOpenVoiceFeynman={() => setIsVoiceFeynmanModalOpen(true)}
+        onOpenKnowledgeTree={() => setIsKnowledgeTreeModalOpen(true)}
+        onOpenPredictiveGrades={() => setIsPredictiveGradeModalOpen(true)}
+        onOpenExamAutomationModal={() => setIsExamAutomationModalOpen(true)}
+        onOpenWhatsAppModal={() => setIsWhatsAppModalOpen(true)}
+        onOpenEmailAgendaModal={() => setIsEmailAgendaModalOpen(true)}
+        onOpenGoogleChat={() => setIsGoogleChatModalOpen(true)}
+        onOpenMaterialImport={() => setIsMaterialImportModalOpen(true)}
+        onOpenWorkspaceHub={(tab) => {
+          if (tab) setWorkspaceHubTab(tab as any);
+          setIsWorkspaceHubOpen(true);
+        }}
+        onOpenAudioStudy={() => setIsAudioStudyModalOpen(true)}
+        onOpenPrintKit={() => setIsPrintKitModalOpen(true)}
+        onOpenQRScanner={() => setIsQRScannerModalOpen(true)}
+        onOpenNotificationDiagnostics={() => setIsNotificationDiagnosticModalOpen(true)}
+        onOpenTranscriptionStudio={() => setIsTranscriptionStudioOpen(true)}
+        onSyncDataBridge={handleSyncDataBridge}
+      />
+
+      {/* Cross-Device Today's Progress Sync Modal (QR & 6-Digit PIN) */}
+      <DailyProgressSyncModal
+        isOpen={isDailyProgressSyncModalOpen}
+        onClose={() => setIsDailyProgressSyncModalOpen(false)}
+        sessions={sessions}
+        plans={plans}
+        userProfile={userProfile}
+        onOpenQRScanner={() => {
+          setIsDailyProgressSyncModalOpen(false);
+          setIsQRScannerModalOpen(true);
+        }}
+        onImportTodayProgress={async (incoming) => {
+          if (Array.isArray(incoming.sessions) && incoming.sessions.length > 0) {
+            const existingIds = new Set(sessions.map(s => s.id));
+            const newSessions = incoming.sessions.filter((s: any) => !existingIds.has(s.id));
+            if (newSessions.length > 0) {
+              const merged = [...newSessions, ...sessions];
+              setSessions(merged);
+              saveLocalState('sessions', merged);
+              for (const ns of newSessions) {
+                await addStudySessionToDb(effectiveUid, ns);
+              }
+            }
+          }
+          if (incoming.studyStreak && (!userProfile?.studyStreak || incoming.studyStreak > userProfile.studyStreak)) {
+            handleUpdateProfile({ studyStreak: incoming.studyStreak });
+          }
+          setActionBanner({
+            message: `⚡ Applied today's study progress: ${(incoming.todayMinutes / 60).toFixed(1)} hrs synchronized!`,
+            type: 'success'
+          });
+        }}
+      />
+
+      {/* Distraction-Free Printable A4 Study Docket Modal */}
+      <PrintableA4StudyDocketModal
+        isOpen={isPrintableDocketModalOpen}
+        onClose={() => setIsPrintableDocketModalOpen(false)}
+        subjects={subjects}
+        plans={plans}
+        revisions={revisions}
+        userProfile={userProfile}
+      />
+
+      {/* Senior Resource Locker Modal */}
+      <SeniorResourceLockerModal
+        isOpen={isSeniorLockerModalOpen}
+        onClose={() => setIsSeniorLockerModalOpen(false)}
+        subjects={subjects}
+        userProfile={userProfile}
+        onAddResourceTo137={(subject, title) => {
+          handleAdd137RevisionCycle({
+            subjectName: subject,
+            chapterName: 'Senior Notes & Derivations',
+            topicName: title,
+            notes: 'High-yield formula sheet & past paper traps from Senior Locker'
+          });
+          setActionBanner({
+            message: `Added "${title}" to your 1-3-7 Spaced Revision cycle!`,
+            type: 'success'
+          });
+        }}
+      />
+
+      {/* External AI Bridge Modal (Option 3 for Claude & ChatGPT & Gemini Web) */}
+      <ExternalAIBridgeModal
+        isOpen={isExternalAIBridgeModalOpen}
+        onClose={() => setIsExternalAIBridgeModalOpen(false)}
+        subjects={subjects}
+        initialSubjectId={externalAIBridgeInitialSubject}
+        initialTopicName={externalAIBridgeInitialTopic}
+        initialMistake={externalAIBridgeInitialMistake}
+      />
+
+      {/* Academic Notice Board Modal (Option 9) */}
+      <AcademicNoticeBoardModal
+        isOpen={isAcademicNoticeBoardModalOpen}
+        onClose={() => setIsAcademicNoticeBoardModalOpen(false)}
+        onNavigateToTab={(tab) => {
+          setIsAcademicNoticeBoardModalOpen(false);
+          setActiveTab(tab as any);
+        }}
+      />
+
+      {/* 1-3-7 Revision Batch Triage Modal (Option 5) */}
+      <RevisionBatchTriageModal
+        isOpen={isRevisionBatchTriageOpen}
+        onClose={() => setIsRevisionBatchTriageOpen(false)}
+        dueCards={dueCards137}
+        onMarkCardDone={(card) => {
+          handleMarkRevisionDone(card.id);
+          setActionBanner({
+            message: `Consolidated "${card.topicName}" into your memory bank!`,
+            type: 'success'
+          });
+        }}
+        onRescheduleQuickCheck={(card) => {
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          handleRescheduleRevision(
+            { subjectName: card.subjectName, topicName: card.topicName, chapterName: card.chapterName },
+            toLocalDateString(tomorrow),
+            'Quick hesitation check rescheduled'
+          );
+        }}
+        onResetDeepFocus={(card) => {
+          handleTransform137Cycle(
+            card.subjectName,
+            card.topicName,
+            toLocalDateString(new Date()),
+            'Reset Day 0 memory interval after memory lapse'
+          );
+        }}
+        onAwardXP={handleAwardXP}
+      />
+
+      {/* Wrong MCQ Distractor Autopsy Modal (Option 10) */}
+      <WrongMCQAutopsyModal
+        isOpen={isWrongMCQModalOpen}
+        onClose={() => setIsWrongMCQModalOpen(false)}
+        subjects={subjects}
+        initialSubjectName={wrongMCQInitialSubject}
+        initialTopicName={wrongMCQInitialTopic}
+        onSaveMistakeSuccess={() => {
+          setActionBanner({
+            message: 'Wrong MCQ Distractor Autopsy recorded in Mistake Vault!',
+            type: 'success'
+          });
+        }}
+        onAwardXP={handleAwardXP}
+      />
+
+      {/* 3-Minute Blurting & Recall Diff Canvas Modal (Option 15) */}
+      <BlurtingDiffCanvasModal
+        isOpen={isBlurtingDiffOpen}
+        onClose={() => setIsBlurtingDiffOpen(false)}
+        subjects={subjects}
+        initialSubjectName={blurtingDiffInitialSubject}
+        initialTopicName={blurtingDiffInitialTopic}
+        onAddMissedToFlashcards={async (topicName, missedKeywords) => {
+          if (missedKeywords.length === 0) return;
+          const newDeck: FlashcardDeck = {
+            id: `deck-blurting-${Date.now()}`,
+            title: `Active Recall Traps: ${topicName}`,
+            description: `Auto-generated from 3-minute blurting recall diff`,
+            subjectName: blurtingDiffInitialSubject || 'General',
+            cards: missedKeywords.map((kw, i) => ({
+              id: `card-${Date.now()}-${i}`,
+              front: `What is the core definition/rule for: ${kw}?`,
+              back: `Key examination mark-scheme concept missed during active blurting on ${topicName}.`,
+              intervalDays: 1,
+              easeFactor: 2.5,
+              repetition: 0,
+              nextReviewDate: new Date().toISOString().split('T')[0]
+            })),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          await handleSaveFlashcardDeck(newDeck);
+          setActionBanner({
+            message: `Created flashcard deck with ${missedKeywords.length} missed concepts from Blurting Canvas!`,
+            type: 'success'
+          });
+        }}
+        onAdd137RevisionCycle={handleAdd137RevisionCycle}
+        onAwardXP={handleAwardXP}
+      />
+
+      {/* Cross-Topic Mistake Synthesizer Modal (Option 18) */}
+      <CrossTopicMistakeSynthesizerModal
+        isOpen={isCrossTopicModalOpen}
+        onClose={() => setIsCrossTopicModalOpen(false)}
+        mistakes={loadMistakes()}
+        subjects={subjects}
+        onAddTo137Cycle={handleAdd137RevisionCycle}
+        onOpenExternalAIBridge={(sub, top, m) => {
+          setExternalAIBridgeInitialSubject(sub);
+          setExternalAIBridgeInitialTopic(top);
+          setExternalAIBridgeInitialMistake(m);
+          setIsExternalAIBridgeModalOpen(true);
+        }}
+        onAwardXP={handleAwardXP}
+      />
+
+      {/* Interactive Socratic Blind-Spot Oral Viva Modal (Option 28) */}
+      <InteractiveSocraticVivaModal
+        isOpen={isSocraticVivaOpen}
+        onClose={() => setIsSocraticVivaOpen(false)}
+        subjects={subjects}
+        initialSubjectName={socraticVivaInitialSubject}
+        initialTopicName={socraticVivaInitialTopic}
+        onAddTo137Cycle={handleAdd137RevisionCycle}
+        onOpenExternalAIBridge={(sub, top, m) => {
+          setExternalAIBridgeInitialSubject(sub);
+          setExternalAIBridgeInitialTopic(top);
+          setExternalAIBridgeInitialMistake(m);
+          setIsExternalAIBridgeModalOpen(true);
+        }}
+        onAwardXP={handleAwardXP}
+      />
+
+      {/* Global Background Timer Pill for Uninterrupted Multi-Tab Navigation */}
+      <GlobalTimerPill
+        currentTab={activeTab}
+        onNavigateToTimer={() => setActiveTab('timer')}
+        onNavigateToCockpit={() => setActiveTab('study_cockpit')}
+        onToggleSplitScreen={() => setIsSplitScreenOpen(prev => !prev)}
+        onSaveCompletedSession={(subject, topic, minutes) => {
+          handleSaveSession({
+            userId: user?.uid || 'guest',
+            subjectName: subject,
+            topicName: topic,
+            chapterName: 'General Study',
+            durationMinutes: minutes,
+            date: new Date().toISOString().split('T')[0],
+            startTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            endTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            result: 'Completed',
+            timestamp: Date.now()
+          });
+        }}
+        onOpenTranscriptionStudio={() => setIsTranscriptionStudioOpen(true)}
+      />
+
+      {/* Split-Screen Study Companion */}
+      <SplitScreenCompanion
+        isOpen={isSplitScreenOpen}
+        onClose={() => setIsSplitScreenOpen(false)}
+        subjects={subjects}
+        userProfile={userProfile}
+        onStartTimerForTopic={handleStartTimerForTopic}
+        onNavigateToCockpit={() => setActiveTab('study_cockpit')}
+      />
+
+      {/* 24-Hour Emergency Pre-Exam Triage & Cram Sheet Modal */}
+      <EmergencyPreExamTriageModal
+        isOpen={isGlobalPreExamTriageOpen}
+        onClose={() => setIsGlobalPreExamTriageOpen(false)}
+        subjects={subjects}
+        userProfile={userProfile}
+        mistakes={loadMistakes()}
+      />
+
+      {/* Google Chat Study Notifications & Audit Modal */}
+      <GoogleChatNotificationModal
+        isOpen={isGoogleChatModalOpen}
+        onClose={() => setIsGoogleChatModalOpen(false)}
+        sessions={sessions}
+        plans={plans}
+        revisions={revisions}
+        mistakes={loadMistakes()}
+        userProfile={userProfile}
+        googleAccessToken={getCachedGmailToken()}
+        onStartTimerForTopic={(sub, chap, top) => {
+          setIsGoogleChatModalOpen(false);
+          handleStartTimerForTopic(sub, chap || 'General', top);
+        }}
+        onNavigateToTimer={() => {
+          setIsGoogleChatModalOpen(false);
+          setActiveTab('timer');
+        }}
+      />
+
+      {/* Front-Facing Google Chat Sidebar & Automated Accountability Coach */}
+      <GoogleChatSidebar
+        isOpen={isGoogleChatSidebarOpen}
+        onClose={() => setIsGoogleChatSidebarOpen(false)}
+        sessions={sessions}
+        plans={plans}
+        revisions={revisions}
+        userProfile={userProfile}
+        subjects={subjects}
+        onStartTimerForTopic={(sub, chap, top) => {
+          setIsGoogleChatSidebarOpen(false);
+          handleStartTimerForTopic(sub, chap || 'General', top);
+        }}
+      />
+
+      {/* 100% Guaranteed On-Screen Heads-Up Display (HUD) Alert Banner */}
+      <ImmediateAlertHUD
+        onNavigateToCockpit={() => setActiveTab('study_cockpit')}
+        onStartTimer={(m) => handleStartTimerForTopic('General', 'Sprint Break', '5m Rest', m)}
+      />
+
+      {/* Notification Diagnostics & Fix Center Modal */}
+      <NotificationDiagnosticModal
+        isOpen={isNotificationDiagnosticModalOpen}
+        onClose={() => setIsNotificationDiagnosticModalOpen(false)}
+        userEmail={userProfile?.email || 'atharkhanteambuster@gmail.com'}
+      />
+
+      {/* Audio & Voice Transcription Studio (Cooks with Gemini AI) */}
+      <AudioTranscriptionStudio
+        isOpen={isTranscriptionStudioOpen}
+        onClose={() => setIsTranscriptionStudioOpen(false)}
+        subjects={subjects}
+        initialSubject={timerTopic.subject}
+        initialTopic={timerTopic.topic}
+        onSaveToNotes={(newNote) => {
+          const noteObj: UserNote = {
+            id: `note_${Date.now()}`,
+            userId: user?.uid || 'guest',
+            title: newNote.title,
+            subjectName: newNote.subject,
+            content: newNote.content,
+            updatedAt: new Date().toISOString()
+          };
+          setNotes(prev => [noteObj, ...prev]);
+          saveLocalState('notes', [noteObj, ...notes]);
+        }}
+        onAttachToActiveTimer={(transcript) => {
+          navigator.clipboard.writeText(transcript);
+          setActionBanner({
+            message: '🎙️ Cooked notes attached to active timer & copied to clipboard!',
+            type: 'success'
+          });
+        }}
+        onAddTo137Cycle={({ subjectName, topicName, notes: revNotes }) => {
+          handleAdd137RevisionCycle({
+            subjectName,
+            chapterName: '',
+            topicName,
+            notes: revNotes
           });
         }}
       />

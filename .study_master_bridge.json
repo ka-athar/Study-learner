@@ -1,0 +1,20 @@
+{
+  "sessions": [
+    {
+      "id": "sess-1",
+      "subjectName": "Physics",
+      "topicName": "Kinematics",
+      "durationMinutes": 25
+    }
+  ],
+  "subjects": [
+    {
+      "id": "sub-1",
+      "name": "Physics",
+      "chapters": []
+    }
+  ],
+  "updatedAt": "2026-11-09T16:39:09.757Z",
+  "lastSyncedBy": "Test Screen",
+  "sourceDeviceId": "unknown_device"
+}

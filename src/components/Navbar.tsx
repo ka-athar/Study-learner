@@ -33,6 +33,7 @@ import {
   Zap,
   Trophy,
   MessageSquare,
+  Award,
   Smartphone,
   Mic,
   PenTool,
@@ -47,7 +48,9 @@ import {
   Menu,
   ChevronDown,
   Languages,
-  Search
+  Search,
+  Flame,
+  Link2
 } from 'lucide-react';
 import { ActiveTab, UserProfile, ThemeConfig } from '../types';
 import { subscribeSyncStatus, SyncStatusInfo } from '../lib/db';
@@ -86,7 +89,22 @@ interface NavbarProps {
   onOpenRetentionGraph?: () => void;
   onOpenMorningWarmup?: () => void;
   onOpenBackupRestore?: () => void;
+  onOpenExternalAIBridge?: () => void;
+  onOpenNoticeBoard?: () => void;
   onForceSaveCloud?: () => void;
+  onOpenRevisionBatchTriage?: () => void;
+  onOpenMCQAutopsy?: () => void;
+  onOpenBlurtingDiffCanvas?: () => void;
+  onOpenCrossTopicSynthesizer?: () => void;
+  onOpenSocraticViva?: () => void;
+  onOpenDailyProgressSync?: () => void;
+  onOpenPrintableDocket?: () => void;
+  onOpenPreExamTriage?: () => void;
+  onOpenGoogleChat?: () => void;
+  onOpenNotificationDiagnostics?: () => void;
+  onOpenTranscriptionStudio?: () => void;
+  onSyncDataBridge?: () => void;
+  isBridgeSyncing?: boolean;
   onSignOut: () => void;
 }
 
@@ -107,6 +125,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenQuickTimer,
   onOpenExamAutomationModal,
   onOpenEmailAgendaModal,
+  onOpenGoogleChat,
+  onOpenNotificationDiagnostics,
+  onOpenTranscriptionStudio,
+  onSyncDataBridge,
+  isBridgeSyncing = false,
   onOpenWhatsAppModal,
   onOpenVoiceFeynman,
   onOpenKnowledgeTree,
@@ -121,7 +144,18 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenRetentionGraph,
   onOpenMorningWarmup,
   onOpenBackupRestore,
+  onOpenExternalAIBridge,
+  onOpenNoticeBoard,
   onForceSaveCloud,
+  onOpenRevisionBatchTriage,
+  onOpenMCQAutopsy,
+  onOpenBlurtingDiffCanvas,
+  onOpenCrossTopicSynthesizer,
+  onOpenSocraticViva,
+  onOpenDailyProgressSync,
+  onOpenPrintableDocket,
+  onOpenSeniorLocker,
+  onOpenPreExamTriage,
   onSignOut,
 }) => {
   const [syncInfo, setSyncInfo] = useState<SyncStatusInfo>({
@@ -181,6 +215,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   }[] = [
     // Core
     { id: 'dashboard', label: 'Dashboard', icon: <Layers className="w-4 h-4" />, category: 'core' },
+    { id: 'study_cockpit', label: 'Study Cockpit', icon: <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />, category: 'core', badge: 'UNIFIED' },
     { id: 'study_habits', label: 'Study Habits & Progress', icon: <CheckSquare className="w-4 h-4 text-emerald-500" />, category: 'core', badge: 'HABITS' },
     { id: 'syllabus', label: 'Syllabus', icon: <BookOpen className="w-4 h-4" />, category: 'core' },
     { id: '137_revision', label: '1-3-7 Revision', icon: <RotateCcw className="w-4 h-4 text-indigo-500 animate-spin-slow" />, category: 'core', badge: '1-3-7' },
@@ -189,7 +224,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'calendar', label: 'Calendar', icon: <Calendar className="w-4 h-4" />, category: 'core' },
 
     // Exam & Mastery Suite
-    { id: 'gemini_notebook', label: 'Gemini Notebook', icon: <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />, category: 'mastery', badge: 'GEMINI' },
+    { id: 'gemini_notebook', label: 'AI Bridge (Option 3)', icon: <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />, category: 'mastery', badge: '$0 FREE' },
     { id: 'boss_battle', label: 'Boss Battle RPG', icon: <Swords className="w-4 h-4 text-amber-600 dark:text-amber-400" />, category: 'mastery', badge: 'RPG' },
     { id: 'knowledge_graph', label: 'Knowledge Web', icon: <Network className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />, category: 'mastery' },
     { id: 'examiner_red_pen', label: "Examiner’s Red Pen", icon: <PenTool className="w-4 h-4 text-rose-500" />, category: 'mastery', badge: 'AI' },
@@ -200,6 +235,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'knowledge_refurbish', label: 'Refurbish Mode', icon: <Sparkles className="w-4 h-4 text-amber-500" />, category: 'mastery', badge: 'AUDIT' },
     { id: 'marks_recovery', label: 'Marks Recovery', icon: <TrendingUp className="w-4 h-4 text-emerald-500" />, category: 'mastery', badge: 'TRIAGE' },
     { id: 'paper_auto_forcing', label: 'Exam Auto-Forcing', icon: <Compass className="w-4 h-4 text-rose-500" />, category: 'mastery', badge: 'FORCED' },
+    { id: 'test_prep', label: 'Test Preparation', icon: <FileCheck className="w-4 h-4 text-rose-500" />, category: 'mastery', badge: 'TIMELINE' },
     { id: 'revision', label: 'Revision', icon: <RotateCcw className="w-4 h-4" />, category: 'mastery' },
 
     // Tasks & School
@@ -210,6 +246,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'vaults', label: 'Vaults', icon: <Archive className="w-4 h-4" />, category: 'tasks' },
 
     // Growth & Stats
+    { id: 'personal_bests', label: 'Personal Bests & Milestones', icon: <Trophy className="w-4 h-4 text-amber-500" />, category: 'growth', badge: 'NEW PB' },
     { id: 'gamification', label: 'Quests & XP', icon: <Trophy className="w-4 h-4 text-amber-500" />, category: 'growth' },
     { id: 'virtual_room', label: 'Study Room', icon: <Headphones className="w-4 h-4 text-indigo-500" />, category: 'growth' },
     { id: 'progress', label: 'Progress', icon: <TrendingUp className="w-4 h-4" />, category: 'growth' },
@@ -229,18 +266,20 @@ export const Navbar: React.FC<NavbarProps> = ({
     <header className="bg-header border-b border-theme text-primary sticky top-0 z-40 shadow-xs transition-colors duration-200">
       {/* Top Bar */}
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
-        {/* Brand */}
+        {/* Brand Logo */}
         <div className="flex items-center gap-2.5 sm:gap-3 cursor-pointer shrink-0" onClick={() => setActiveTab('dashboard')}>
-          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-primary p-0.5 flex items-center justify-center shadow-xs">
-            <div className="w-full h-full bg-primary rounded-[10px] flex items-center justify-center">
-              <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-            </div>
+          <div className="w-9 h-9 rounded-2xl bg-[#6B705C] flex items-center justify-center text-white shadow-xs">
+            <BookOpen className="w-5 h-5" />
           </div>
           <div>
             <h1 className="text-sm sm:text-base font-serif italic font-bold tracking-tight text-primary flex items-center gap-1.5 sm:gap-2">
-              StudyPlanner <span className="text-[9px] sm:text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-theme-accent text-primary border border-theme font-sans font-semibold hidden xs:inline">{THEME_PALETTES[themeConfig?.palette || themeConfig?.preset || 'natural_ethos']?.name || 'Natural Ethos'}</span>
+              <span>StudyPlanner</span>
+              <span className="text-[9px] font-mono font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                <span>Pro</span>
+              </span>
             </h1>
-            <p className="text-[10px] sm:text-[11px] text-muted hidden lg:block">Personalized Academic Organizer & AI Tutor</p>
+            <p className="text-[10px] sm:text-[11px] text-muted hidden lg:block">Personalized Academic Organizer & Exam Pacer</p>
           </div>
         </div>
 
@@ -265,8 +304,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Live Device Connection Status Area (CONNECTED • iPad • Last sync / NOT CONNECTED) */}
           <ConnectionStatusPill
             onOpenConnectModal={() => {
-              if (onOpenDeviceTransfer) onOpenDeviceTransfer();
-              else if (onOpenDeviceSync) onOpenDeviceSync();
+              if (onOpenDeviceSync) onOpenDeviceSync();
+              else if (onOpenDeviceTransfer) onOpenDeviceTransfer();
             }}
             onSyncNow={onForceSaveCloud}
             isSyncing={syncInfo.state === 'saving'}
@@ -346,6 +385,45 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
+          {/* Push Notification Diagnostics & Status Button */}
+          {onOpenNotificationDiagnostics && (
+            <button
+              onClick={onOpenNotificationDiagnostics}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border border-amber-500/35 font-bold text-xs transition shadow-2xs cursor-pointer active:scale-95 shrink-0"
+              title="Push Notification Diagnostics: Verify audio alarm, desktop alerts & unblock permissions"
+            >
+              <Bell className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+              <span className="font-semibold text-[11px] sm:text-xs">Alert Status</span>
+            </button>
+          )}
+
+          {/* Voice & Audio Transcription Studio (Cooks with Gemini AI) */}
+          {onOpenTranscriptionStudio && (
+            <button
+              onClick={onOpenTranscriptionStudio}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full bg-orange-500/15 hover:bg-orange-500/25 text-orange-700 dark:text-orange-300 border border-orange-500/35 font-bold text-xs transition shadow-2xs cursor-pointer active:scale-95 shrink-0"
+              title="Voice & Audio Transcription Studio: Record voice notes & cook with Gemini AI"
+            >
+              <Flame className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400" />
+              <span className="font-semibold text-[11px] sm:text-xs">Voice Studio</span>
+              <span className="px-1 py-0.2 rounded-full bg-orange-500 text-stone-950 text-[9px] font-bold">Cook</span>
+            </button>
+          )}
+
+          {/* Universal Cross-Screen & Builder App Live Data Bridge */}
+          {onSyncDataBridge && (
+            <button
+              onClick={onSyncDataBridge}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-700 dark:text-cyan-300 border border-cyan-500/35 font-bold text-xs transition shadow-2xs cursor-pointer active:scale-95 shrink-0"
+              title="Link & Sync Data: Instantly synchronize timer and study sessions between external screen and builder app"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 ${isBridgeSyncing ? 'animate-spin' : ''}`} />
+              <span className="font-semibold text-[11px] sm:text-xs">
+                {isBridgeSyncing ? 'Linking...' : 'Screen Link'}
+              </span>
+            </button>
+          )}
+
           {/* 24/7 Automated Exam Countdown & Syllabus Alerts Button */}
           {onOpenExamAutomationModal && (
             <button
@@ -394,6 +472,18 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="font-semibold text-[11px] sm:text-xs">Study Tools</span>
             <span className="px-1.5 py-0.2 rounded-full bg-primary text-white text-[9px] font-bold">Suite</span>
           </button>
+
+          {/* Google Chat Space & Automated Dispatches */}
+          {onOpenGoogleChat && (
+            <button
+              onClick={onOpenGoogleChat}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 transition cursor-pointer shadow-2xs shrink-0"
+              title="Google Chat: Daily Flight Plan, Done vs. Not Done Audit, and Inactivity Coach"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span className="font-semibold text-[11px] sm:text-xs">Google Chat</span>
+            </button>
+          )}
 
           {/* PWA App Install Button (Desktop & Mobile) */}
           <PWAInstallButton variant="compact" />
@@ -575,7 +665,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl min-h-[44px] bg-primary text-white font-bold text-xs shadow-xs cursor-pointer active:scale-98 transition"
             >
               <Compass className="w-4 h-4" />
-              <span>Open AI Tools & Exam Suite (12)</span>
+              <span>Open AI Tools & Exam Suite (19)</span>
             </button>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -631,7 +721,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           className="flex items-center gap-1.5 px-3.5 py-2 min-h-[44px] rounded-2xl bg-primary text-white font-bold whitespace-nowrap shrink-0 shadow-2xs active:scale-95 cursor-pointer"
         >
           <Compass className="w-3.5 h-3.5" />
-          <span>All AI Tools (12)</span>
+          <span>All AI Tools (19)</span>
         </button>
 
         {onOpenWhatsAppModal && (
@@ -814,6 +904,30 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </p>
                 </div>
               )}
+
+              {/* Tool: Personal Bests & Academic Milestones */}
+              <div
+                onClick={() => {
+                  setActiveTab('personal_bests');
+                  setIsToolsModalOpen(false);
+                }}
+                className="p-4 rounded-2xl bg-surface-raised hover:bg-amber-500/10 border border-amber-500/30 transition cursor-pointer group space-y-1.5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/15 flex items-center justify-center text-amber-600">
+                    <Trophy className="w-4 h-4" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-bold">
+                    Self-Growth
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-primary group-hover:text-amber-600 transition-colors">
+                  Personal Bests & Milestones
+                </h3>
+                <p className="text-[11px] text-muted leading-relaxed">
+                  Track 14 performance records, unlock verified academic milestones, and autopsy recurring weaknesses.
+                </p>
+              </div>
 
               {/* Tool 1: Examiner's Red Pen */}
               <div
@@ -1045,6 +1159,32 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </div>
               )}
 
+              {/* Tool: Google Chat Study Notifications (Done vs Not Done) */}
+              {onOpenGoogleChat && (
+                <div
+                  onClick={() => {
+                    setIsToolsModalOpen(false);
+                    onOpenGoogleChat();
+                  }}
+                  className="p-4 rounded-2xl bg-surface-raised hover:bg-emerald-500/10 border border-emerald-500/30 transition cursor-pointer group space-y-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-600">
+                      <MessageSquare className="w-4 h-4" />
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold">
+                      Audit Notifications
+                    </span>
+                  </div>
+                  <h3 className="text-xs font-bold text-primary group-hover:text-emerald-600 transition-colors">
+                    Google Chat Study Notifications
+                  </h3>
+                  <p className="text-[11px] text-muted leading-relaxed">
+                    Automated audit cards of what you have done vs what is pending sent directly to your Google Chat space.
+                  </p>
+                </div>
+              )}
+
               {/* Tool 8: Audio Flashcards & Podcast */}
               {onOpenAudioStudy && (
                 <div
@@ -1171,6 +1311,182 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </h3>
                   <p className="text-[11px] text-muted leading-relaxed">
                     Real-time synchronization with Google Classroom, Drive, Calendar, Keep, Docs, and Meet.
+                  </p>
+                </div>
+              )}
+
+              {/* Tool: 24-Hour Emergency Pre-Exam Triage Desk & Cram Sheet */}
+              <div
+                onClick={() => {
+                  setIsToolsModalOpen(false);
+                  if (onOpenPreExamTriage) onOpenPreExamTriage();
+                  else setActiveTab('calendar');
+                }}
+                className="p-4 rounded-2xl bg-surface-raised hover:bg-rose-500/10 border border-rose-500/30 transition cursor-pointer group space-y-1.5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-rose-500/15 flex items-center justify-center text-rose-600">
+                    <Zap className="w-4 h-4 fill-current" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold">
+                    24h Triage
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-primary group-hover:text-rose-600 transition-colors">
+                  🚨 Pre-Exam Triage & Cram Desk
+                </h3>
+                <p className="text-[11px] text-muted leading-relaxed">
+                  High-stakes triage matrix, formula traps from Mistake Vault, and printable 1-page A4 dossier.
+                </p>
+              </div>
+
+              {/* Tool 13: Option 5 - 1-3-7 Spaced Revision Batch Triage */}
+              <div
+                onClick={() => {
+                  setIsToolsModalOpen(false);
+                  if (onOpenRevisionBatchTriage) onOpenRevisionBatchTriage();
+                  else setActiveTab('137_revision');
+                }}
+                className="p-4 rounded-2xl bg-surface-raised hover:bg-indigo-500/10 border border-indigo-500/30 transition cursor-pointer group space-y-1.5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-500/15 flex items-center justify-center text-indigo-600">
+                    <RotateCcw className="w-4 h-4 animate-spin-slow" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold">
+                    Option 5
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-primary group-hover:text-indigo-600 transition-colors">
+                  1-3-7 Revision Batch Triage
+                </h3>
+                <p className="text-[11px] text-muted leading-relaxed">
+                  Tinder-style swipe & rapid triage for all Day 1, 3, 7 memory consolidation cards due today.
+                </p>
+              </div>
+
+              {/* Tool 14: Option 10 - Wrong MCQ Distractor Autopsy */}
+              <div
+                onClick={() => {
+                  setIsToolsModalOpen(false);
+                  if (onOpenMCQAutopsy) onOpenMCQAutopsy();
+                  else setActiveTab('mistake_vault');
+                }}
+                className="p-4 rounded-2xl bg-surface-raised hover:bg-rose-500/10 border border-rose-500/30 transition cursor-pointer group space-y-1.5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-rose-500/15 flex items-center justify-center text-rose-600">
+                    <BookmarkCheck className="w-4 h-4" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold">
+                    Option 10
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-primary group-hover:text-rose-600 transition-colors">
+                  Wrong MCQ Distractor Autopsy
+                </h3>
+                <p className="text-[11px] text-muted leading-relaxed">
+                  Paste missed questions to dissect distractor fallacies, careless traps, and cognitive root causes.
+                </p>
+              </div>
+
+              {/* Tool 15: Option 15 - 3-Min Blurting Diff Canvas */}
+              <div
+                onClick={() => {
+                  setIsToolsModalOpen(false);
+                  if (onOpenBlurtingDiffCanvas) onOpenBlurtingDiffCanvas();
+                  else setActiveTab('blurt_recall');
+                }}
+                className="p-4 rounded-2xl bg-surface-raised hover:bg-amber-500/10 border border-amber-500/30 transition cursor-pointer group space-y-1.5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/15 flex items-center justify-center text-amber-600">
+                    <Zap className="w-4 h-4" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-bold">
+                    Option 15
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-primary group-hover:text-amber-600 transition-colors">
+                  3-Min Blurting Diff Canvas
+                </h3>
+                <p className="text-[11px] text-muted leading-relaxed">
+                  Closed-book recall brain-dump audited side-by-side with official rubric mark schemes.
+                </p>
+              </div>
+
+              {/* Tool 16: Option 18 - Cross-Topic Mistake Synthesizer */}
+              <div
+                onClick={() => {
+                  setIsToolsModalOpen(false);
+                  if (onOpenCrossTopicSynthesizer) onOpenCrossTopicSynthesizer();
+                  else setActiveTab('mistake_vault');
+                }}
+                className="p-4 rounded-2xl bg-surface-raised hover:bg-emerald-500/10 border border-emerald-500/30 transition cursor-pointer group space-y-1.5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-600">
+                    <Network className="w-4 h-4" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold">
+                    Option 18
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-primary group-hover:text-emerald-600 transition-colors">
+                  Cross-Topic Mistake Synthesizer
+                </h3>
+                <p className="text-[11px] text-muted leading-relaxed">
+                  Bridge and cross-communicate mutual failure patterns between your top mistake topics in the vault.
+                </p>
+              </div>
+
+              {/* Tool 17: Option 28 - Interactive Socratic Blind-Spot Viva */}
+              <div
+                onClick={() => {
+                  setIsToolsModalOpen(false);
+                  if (onOpenSocraticViva) onOpenSocraticViva();
+                  else setActiveTab('mistake_vault');
+                }}
+                className="p-4 rounded-2xl bg-surface-raised hover:bg-purple-500/10 border border-purple-500/30 transition cursor-pointer group space-y-1.5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-purple-500/15 flex items-center justify-center text-purple-600">
+                    <Brain className="w-4 h-4" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-purple-600 text-white text-[10px] font-bold">
+                    Option 28
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-primary group-hover:text-purple-600 transition-colors">
+                  Socratic Blind-Spot Oral Viva
+                </h3>
+                <p className="text-[11px] text-muted leading-relaxed">
+                  Step-by-step viva sandbox: Premise defense, boundary stress-test & cognitive resilience verdict.
+                </p>
+              </div>
+
+              {/* Tool 18: Cross-Device Hours Sync */}
+              {onOpenDailyProgressSync && (
+                <div
+                  onClick={() => {
+                    setIsToolsModalOpen(false);
+                    onOpenDailyProgressSync();
+                  }}
+                  className="p-4 rounded-2xl bg-surface-raised hover:bg-emerald-500/10 border border-emerald-500/30 transition cursor-pointer group space-y-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-600">
+                      <Clock className="w-4 h-4" />
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold">
+                      QR / PIN
+                    </span>
+                  </div>
+                  <h3 className="text-xs font-bold text-primary group-hover:text-emerald-600 transition-colors">
+                    Sync Daily Hours & Logs
+                  </h3>
+                  <p className="text-[11px] text-muted leading-relaxed">
+                    Transfer today's delivered study hours, streak, and completed sessions across iPad, phone & laptop.
                   </p>
                 </div>
               )}

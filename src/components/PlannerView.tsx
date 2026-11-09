@@ -26,6 +26,8 @@ import { Subject, StudySession, TestResult, StudyPlan, StudyPlanTopic, TopicComp
 import { apiGenerateStudyPlan } from '../lib/aiApi';
 import { AIScheduleImportCard } from './AIScheduleImportCard';
 import { TaskDetailModal } from './TaskDetailModal';
+import { SmartScheduleConflictResolverModal } from './SmartScheduleConflictResolverModal';
+import { diagnoseScheduleConflicts } from '../lib/scheduleConflictEngine';
 
 interface PlannerViewProps {
   subjects: Subject[];
@@ -77,10 +79,25 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
     plans.length > 0 ? plans[0].id : ''
   );
 
+  // Category B: Conflict Resolver & Auto-Rescheduler state
+  const [isConflictResolverOpen, setIsConflictResolverOpen] = useState<boolean>(false);
+
   // Synchronize current plan with latest plans list
   const currentPlan = plans.find(p => p.id === selectedPlanId) || (plans.length > 0 ? plans[0] : null);
 
   const planDateStr = currentPlan ? currentPlan.date : new Date().toISOString().split('T')[0];
+
+  // Category B: Run schedule diagnosis on planner items
+  const planDiagnosis = useMemo(() => {
+    return diagnoseScheduleConflicts({
+      plans,
+      assignments,
+      examDates: userProfile?.examDates || [],
+      revisions,
+      userProfile,
+      targetDate: planDateStr
+    });
+  }, [plans, assignments, userProfile, revisions, planDateStr]);
   const conflictingAssignments = useMemo(() => {
     return (assignments || []).filter(a => a.dueDate === planDateStr && !a.completed);
   }, [assignments, planDateStr]);
@@ -250,6 +267,16 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
             <span>Share WhatsApp</span>
           </button>
 
+          {/* Category B Option 1: Conflict Resolver & Auto-Reschedule Button */}
+          <button
+            onClick={() => setIsConflictResolverOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition shadow-2xs cursor-pointer active:scale-95"
+            title="Category B: Resolve timetable conflicts, overlaps, and auto-reschedule overloaded sessions"
+          >
+            <Zap className="w-3.5 h-3.5 fill-current" />
+            <span>Resolve Clashes ({planDiagnosis.conflicts.length})</span>
+          </button>
+
           {/* Mode Switcher */}
           <div className="flex rounded-2xl bg-[#F9F7F2] p-1 border border-[#E0DBD0] text-xs">
             <button
@@ -303,6 +330,38 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
             className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs active:scale-95"
           >
             <span>Review Revisions</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Category B: Timetable Clashes & Overcapacity Resolution Banner */}
+      {planDiagnosis.conflicts.length > 0 && (
+        <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs animate-fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Zap className="w-5 h-5 fill-current" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-primary flex items-center gap-2">
+                <span>{planDiagnosis.conflicts.length} Timetable Clashes on {planDateStr}</span>
+                {planDiagnosis.criticalCount > 0 && (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-700 dark:text-rose-300 font-bold">
+                    {planDiagnosis.criticalCount} Critical
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-muted mt-0.5">
+                Overlapping study slots or daily study capacity exceeded. Auto-rebalance will spread work into buffer study windows.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsConflictResolverOpen(true)}
+            className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs active:scale-95"
+          >
+            <Zap className="w-3.5 h-3.5 fill-current" />
+            <span>Resolve & Rebalance</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -866,6 +925,25 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           }}
         />
       )}
+
+      {/* Category B Option 1: Dynamic Conflict Resolver & Real-time Auto-Rescheduler Modal */}
+      <SmartScheduleConflictResolverModal
+        isOpen={isConflictResolverOpen}
+        onClose={() => setIsConflictResolverOpen(false)}
+        plans={plans}
+        assignments={assignments}
+        examDates={userProfile?.examDates || []}
+        revisions={revisions}
+        userProfile={userProfile}
+        targetDate={planDateStr}
+        onBatchSavePlans={async (updatedPlans) => {
+          // If onBatchSavePlans not in props, save each plan
+          for (const p of updatedPlans) {
+            await onSavePlan(p);
+          }
+        }}
+        onSavePlan={onSavePlan}
+      />
     </div>
   );
 };

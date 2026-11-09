@@ -47,6 +47,7 @@ interface BulkScheduleUploaderProps {
   userProfile: UserProfile | null;
   existingPlans: StudyPlan[];
   onSavePlan: (plan: Omit<StudyPlan, 'id'>) => Promise<void> | void;
+  onBatchSavePlans?: (plans: Array<StudyPlan | Omit<StudyPlan, 'id'>>) => Promise<void> | void;
   setActiveTab?: (tab: ActiveTab) => void;
 }
 
@@ -108,6 +109,7 @@ export const BulkScheduleUploader: React.FC<BulkScheduleUploaderProps> = ({
   userProfile,
   existingPlans = [],
   onSavePlan,
+  onBatchSavePlans,
   setActiveTab
 }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
@@ -386,6 +388,8 @@ export const BulkScheduleUploader: React.FC<BulkScheduleUploaderProps> = ({
 
       let plansCreatedCount = 0;
 
+      const payloadsToSave: Array<Omit<StudyPlan, 'id'>> = [];
+
       // Create or merge StudyPlan for each date
       for (const [date, itemsForDate] of Object.entries(dateMap)) {
         const topics: StudyPlanTopic[] = itemsForDate.map((item, idx) => ({
@@ -411,9 +415,17 @@ export const BulkScheduleUploader: React.FC<BulkScheduleUploaderProps> = ({
           topics
         };
 
-        await onSavePlan(planPayload);
-        plansCreatedCount++;
+        payloadsToSave.push(planPayload);
       }
+
+      if (onBatchSavePlans) {
+        await onBatchSavePlans(payloadsToSave);
+      } else {
+        for (const payload of payloadsToSave) {
+          await onSavePlan(payload);
+        }
+      }
+      plansCreatedCount = payloadsToSave.length;
 
       setImportSuccessMessage(`🎉 Successfully imported ${parsedItems.length} study sessions across ${plansCreatedCount} days into your Daily & Weekly Study Plans!`);
       setParsedItems([]);

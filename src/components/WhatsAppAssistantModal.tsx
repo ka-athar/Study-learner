@@ -501,13 +501,15 @@ export const WhatsAppAssistantModal: React.FC<WhatsAppAssistantModalProps> = ({
                   <span>{copied ? 'Copied to Clipboard!' : 'Copy Text'}</span>
                 </button>
 
-                <button
-                  onClick={handleOpenWhatsApp}
+                <a
+                  href={buildWaMeUrl(config.phoneNumber, currentMessage)}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-[#25D366] hover:bg-[#1ebd59] text-white text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer shadow-md"
                 >
                   <Send className="w-4 h-4" />
                   <span>Open in WhatsApp & Send</span>
-                </button>
+                </a>
               </div>
             </div>
           )}

@@ -47,7 +47,8 @@ import {
 import { 
   generateTransferPin, 
   redeemTransferPin, 
-  detectDeviceInfo 
+  detectDeviceInfo,
+  pullFullCloudSnapshot 
 } from '../lib/deviceService';
 import { 
   analyzeTransferDiff, 
@@ -56,7 +57,7 @@ import {
   setPairedDeviceStatus,
   LocalStudyDataset
 } from '../lib/deviceTransferEngine';
-import { setPairedSyncUid, setActiveUserEmail } from '../lib/db';
+import { setPairedSyncUid, setActiveUserEmail, resolveActiveUserId } from '../lib/db';
 
 interface DeviceTransferModalProps {
   isOpen: boolean;
@@ -118,13 +119,30 @@ export const DeviceTransferModal: React.FC<DeviceTransferModalProps> = ({
     }
   }, [initialScannedPayload]);
 
+  // When initialPin is passed from QR scan or URL parameter, auto-populate and auto-lookup immediately
+  useEffect(() => {
+    if (initialPin) {
+      const clean = String(initialPin).replace(/[^0-9]/g, '').slice(0, 6);
+      if (clean) {
+        setInputPin(clean);
+        setConnectTab('scan_manual');
+        if (clean.length === 6) {
+          handleLookupPin(undefined, clean);
+        }
+      }
+    }
+  }, [initialPin]);
+
   const handleGenerateHostPin = async () => {
     setIsGeneratingPin(true);
     try {
       const devInfo = detectDeviceInfo();
+      const effectiveUserUid = localDataset.profile?.uid || localDataset.profile?.id || resolveActiveUserId(null, localDataset.profile?.email) || 'user_primary';
+      const userEmail = localDataset.profile?.email || '';
+
       const res = await generateTransferPin(
-        localDataset.profile?.uid || 'current_user',
-        localDataset.profile?.email || '',
+        effectiveUserUid,
+        userEmail,
         localDataset
       );
 
@@ -134,7 +152,7 @@ export const DeviceTransferModal: React.FC<DeviceTransferModalProps> = ({
         // Generate clean QR code referencing this device handshake without dumping raw DB in QR
         const origin = typeof window !== 'undefined' ? window.location.origin : '';
         const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-        const linkUrl = `${origin}${pathname}?transfer_code=${res.code}&device=${encodeURIComponent(devInfo.deviceName)}`;
+        const linkUrl = `${origin}${pathname}?transfer_code=${res.code}&sync_uid=${encodeURIComponent(effectiveUserUid)}&email=${encodeURIComponent(userEmail)}&device=${encodeURIComponent(devInfo.deviceName)}`;
 
         const url = await QRCode.toDataURL(linkUrl, {
           width: 280,
@@ -159,9 +177,9 @@ export const DeviceTransferModal: React.FC<DeviceTransferModalProps> = ({
     setActiveScreen('preview');
   };
 
-  const handleLookupPin = async (e?: React.FormEvent) => {
+  const handleLookupPin = async (e?: React.FormEvent, overrideCode?: string) => {
     if (e) e.preventDefault();
-    const clean = inputPin.replace(/[^0-9]/g, '').trim();
+    const clean = (overrideCode || inputPin).replace(/[^0-9]/g, '').trim();
     if (clean.length !== 6) {
       setLookupError('Please enter a 6-digit code from your other device.');
       return;
@@ -172,8 +190,29 @@ export const DeviceTransferModal: React.FC<DeviceTransferModalProps> = ({
 
     try {
       const res = await redeemTransferPin(clean, { forcePull: true });
-      if (res.success && res.payload) {
-        handleInspectPayload(res.payload, res.deviceName || `Device (${clean})`);
+      let payloadToUse = res.payload;
+
+      // If payload wasn't embedded on the root document, pull the full snapshot for this UID
+      if (res.success && (!payloadToUse || !Array.isArray(payloadToUse.subjects) || payloadToUse.subjects.length === 0) && res.uid) {
+        const cloudPull = await pullFullCloudSnapshot(res.uid);
+        if (cloudPull.success && cloudPull.snapshot) {
+          payloadToUse = cloudPull.snapshot;
+        }
+      }
+
+      if (res.success) {
+        const finalPayload = payloadToUse || {
+          subjects: [],
+          plans: [],
+          sessions: [],
+          vaults: [],
+          assignments: [],
+          testResults: [],
+          flashcardDecks: [],
+          revisions: [],
+          profile: { uid: res.uid, email: res.email }
+        };
+        handleInspectPayload(finalPayload, res.deviceName || `Device (${clean})`);
       } else {
         setLookupError(res.message || 'Device not found. Please verify the 6-digit PIN on your other device.');
       }
@@ -406,7 +445,13 @@ export const DeviceTransferModal: React.FC<DeviceTransferModalProps> = ({
                         type="text"
                         maxLength={6}
                         value={inputPin}
-                        onChange={(e) => setInputPin(e.target.value.replace(/[^0-9]/g, ''))}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
+                          setInputPin(val);
+                          if (val.length === 6) {
+                            handleLookupPin(undefined, val);
+                          }
+                        }}
                         placeholder="e.g. 583921"
                         className="flex-1 px-4 py-3 rounded-2xl border border-theme bg-theme-card text-primary font-mono text-xl tracking-widest text-center font-bold focus:outline-hidden focus:ring-2 focus:ring-primary/20"
                       />

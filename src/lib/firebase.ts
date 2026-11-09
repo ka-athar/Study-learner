@@ -5,6 +5,7 @@ import {
   initializeFirestore, 
   persistentLocalCache, 
   persistentMultipleTabManager,
+  memoryLocalCache,
   setLogLevel
 } from 'firebase/firestore';
 import firebaseConfigJson from '../../firebase-applet-config.json';
@@ -44,22 +45,31 @@ googleProvider.addScope('https://www.googleapis.com/auth/classroom.rosters.reado
 googleProvider.addScope('https://www.googleapis.com/auth/documents');
 googleProvider.addScope('https://www.googleapis.com/auth/meetings.space.created');
 googleProvider.addScope('https://www.googleapis.com/auth/meetings.space.readonly');
+googleProvider.addScope('https://www.googleapis.com/auth/chat.spaces.readonly');
+googleProvider.addScope('https://www.googleapis.com/auth/chat.messages.create');
 
-// Suppress non-critical Firestore offline/network warnings while keeping error reporting
+// Suppress internal Firestore connection retry logs and offline mode notices
 try {
-  setLogLevel('error');
+  setLogLevel('silent');
 } catch {
   // Ignore if setLogLevel is restricted
 }
 
-// Initialize Firestore with auto-detect long-polling and local multi-tab cache for seamless offline + online persistence
+// Initialize Firestore with forced long-polling and local multi-tab cache for seamless offline + online persistence
 const customDatabaseId = (firebaseConfigJson as Record<string, any>).firestoreDatabaseId;
 
-const firestoreSettings = {
-  experimentalAutoDetectLongPolling: true,
-  localCache: persistentLocalCache({
+let localCacheConfig;
+try {
+  localCacheConfig = persistentLocalCache({
     tabManager: persistentMultipleTabManager()
-  })
+  });
+} catch {
+  localCacheConfig = memoryLocalCache();
+}
+
+const firestoreSettings = {
+  experimentalForceLongPolling: true,
+  localCache: localCacheConfig
 };
 
 let firestoreInstance;
@@ -68,9 +78,13 @@ try {
     ? initializeFirestore(app, firestoreSettings, customDatabaseId)
     : initializeFirestore(app, firestoreSettings);
 } catch (err) {
-  firestoreInstance = customDatabaseId && customDatabaseId !== '(default)'
-    ? getFirestore(app, customDatabaseId)
-    : getFirestore(app);
+  try {
+    firestoreInstance = customDatabaseId && customDatabaseId !== '(default)'
+      ? getFirestore(app, customDatabaseId)
+      : getFirestore(app);
+  } catch {
+    firestoreInstance = getFirestore(app);
+  }
 }
 
 export const db = firestoreInstance;

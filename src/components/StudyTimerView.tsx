@@ -43,14 +43,18 @@ import {
   Languages,
   Palette,
   MessageSquare,
+  Edit3,
   Target,
   AlertTriangle,
   Flame,
-  Plus
+  Plus,
+  CheckSquare,
+  Printer
 } from 'lucide-react';
 import { 
   Subject, 
   StudySession, 
+  StudyPlan,
   UserProfile, 
   UserNote, 
   ActivityLog, 
@@ -59,6 +63,7 @@ import {
   BlurtRecallEvaluation,
   CognitiveErrorCategory
 } from '../types';
+import { openStudyKitPrintWindow } from '../lib/studyKitExportService';
 import { apiGenerateBlurtPrompt, apiEvaluateBlurtRecall } from '../lib/aiApi';
 import { compressImageFile } from '../lib/base64Utils';
 import { addMistake } from '../lib/mistakeVaultStorage';
@@ -73,6 +78,10 @@ import {
   getCachedGmailToken 
 } from '../lib/gmailService';
 import { getActiveUserEmail } from '../lib/db';
+import { transferSingleTaskToGoogleTasks, isItemTransferredToGoogleTasks } from '../lib/googleTasksService';
+import { SbbmAnswerSheetModal } from './SbbmAnswerSheetModal';
+import { SBBMCrest } from './SBBMCrest';
+import { persistRunningTimer, getPersistedTimer, clearRunningTimer } from '../lib/globalTimerService';
 
 interface StudyTimerViewProps {
   subjects: Subject[];
@@ -101,6 +110,7 @@ interface StudyTimerViewProps {
   onNavigateTab?: (tab: any) => void;
   onOpenZenSprint?: (subjectName: string, topicName: string) => void;
   onOpenCheatSheet?: (subjectName: string, topicName: string) => void;
+  plans?: StudyPlan[];
 }
 
 // Subtle entrance animation variants for immersive focus experience
@@ -141,6 +151,7 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
   onAddTo137Cycle,
   userProfile = null,
   sessions = [],
+  plans = [],
   user = null,
   notes = [],
   onLogActivity,
@@ -150,9 +161,101 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
   onOpenZenSprint,
   onOpenCheatSheet
 }) => {
-  // Mode toggle: Focus Timer vs Integrated AI Blurt & Notes Upload
-  const [activeMode, setActiveMode] = useState<'timer' | 'blurt'>('timer');
+  // Mode toggle: 4 Engine Options (MCQ Pacer, Chapter Sprint, Blurt Studio, Rupex Locker) vs Focus Timer
+  const [activeMode, setActiveMode] = useState<'timer' | 'chapter_sprint' | 'blurt' | 'mcq_pacer' | 'rupex_locker'>('mcq_pacer');
   const [isFullscreenFocus, setIsFullscreenFocus] = useState<boolean>(false);
+
+  // Overall Board Exam Pressure Pacing Timer State (Option 1)
+  const [examPressureType, setExamPressureType] = useState<'mcq' | 'short_question' | 'long_question' | 'mixed_board'>('mcq');
+
+  // MCQ Exam Pressure Pacing Timer State
+  const [mcqTotalCount, setMcqTotalCount] = useState<number>(1);
+  const [mcqSecondsPerQuestion, setMcqSecondsPerQuestion] = useState<number>(21.5); // 21.5s benchmark as requested
+  const [mcqBufferSeconds, setMcqBufferSeconds] = useState<number>(2); // 1, 2, or 3s buffer (strictly max 3s)
+  const [mcqCurrentIndex, setMcqCurrentIndex] = useState<number>(1);
+  const [mcqQuestionSecondsLeft, setMcqQuestionSecondsLeft] = useState<number>(21.5);
+  const [mcqIsActive, setMcqIsActive] = useState<boolean>(false);
+  const [mcqIsPaused, setMcqIsPaused] = useState<boolean>(false);
+  const [mcqIsBufferActive, setMcqIsBufferActive] = useState<boolean>(false);
+  const [mcqBufferSecondsLeft, setMcqBufferSecondsLeft] = useState<number>(2);
+  const [mcqAnswers, setMcqAnswers] = useState<Record<number, string>>({});
+  const [mcqQuestionTimes, setMcqQuestionTimes] = useState<Record<number, number>>({});
+  const [mcqIsFinished, setMcqIsFinished] = useState<boolean>(false);
+  const [mcqTotalElapsedSeconds, setMcqTotalElapsedSeconds] = useState<number>(0);
+  const [mcqAudioChimeEnabled, setMcqAudioChimeEnabled] = useState<boolean>(true);
+  const [mcqSelectedSubject, setMcqSelectedSubject] = useState<string>(initialSubject || subjects[0]?.name || '');
+  const [mcqSelectedChapter, setMcqSelectedChapter] = useState<string>(initialChapter || subjects[0]?.chapters[0]?.name || '');
+
+  // Short Question (SQ) Exam Pressure Pacer State
+  const [sqTotalCount, setSqTotalCount] = useState<number>(5);
+  const [sqMinutesPerQuestion, setSqMinutesPerQuestion] = useState<number>(2); // 2m quick mode preset as requested!
+  const [sqCurrentIndex, setSqCurrentIndex] = useState<number>(1);
+  const [sqSecondsLeft, setSqSecondsLeft] = useState<number>(120); // 2 mins = 120s
+  const [sqAnswersText, setSqAnswersText] = useState<Record<number, string>>({});
+  const [sqAudioRecordings, setSqAudioRecordings] = useState<Record<number, { isRecorded: boolean; duration: number }>>({});
+
+  // Long Question (LQ) Exam Pressure Pacer State
+  const [lqTotalCount, setLqTotalCount] = useState<number>(2);
+  const [lqMinutesPerQuestion, setLqMinutesPerQuestion] = useState<number>(15); // 15m quick mode preset as requested!
+  const [lqCurrentIndex, setLqCurrentIndex] = useState<number>(1);
+  const [lqSecondsLeft, setLqSecondsLeft] = useState<number>(900); // 15 mins = 900s
+  const [lqAnswersText, setLqAnswersText] = useState<Record<number, string>>({});
+  const [lqAudioRecordings, setLqAudioRecordings] = useState<Record<number, { isRecorded: boolean; duration: number }>>({});
+  const [lqMilestones, setLqMilestones] = useState<Record<number, { intro: boolean; derivation: boolean; diagram: boolean; units: boolean }>>({});
+
+  // Live Voice Recording State for Verbal Answers
+  const [isExamAudioRecording, setIsExamAudioRecording] = useState<boolean>(false);
+  const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
+
+  // SBBM Answer Sheet Modal State
+  const [isAnswerSheetModalOpen, setIsAnswerSheetModalOpen] = useState<boolean>(false);
+
+  // Rupex Rubric Locker & Saved Schemes (Option 4)
+  const [savedRupexList, setSavedRupexList] = useState<Array<{
+    id: string;
+    name: string;
+    subjectName: string;
+    chapterName?: string;
+    base64: string;
+    mimeType: string;
+    previewUrl: string;
+    sizeFormatted: string;
+    uploadedAt: string;
+  }>>(() => {
+    try {
+      const raw = localStorage.getItem('studyflow_rupex_vault_v1');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isRupexLockerOpen, setIsRupexLockerOpen] = useState<boolean>(false);
+
+  // Chapter & Multi-Chapter Sprint state
+  const [chapterScope, setChapterScope] = useState<'single' | 'multi'>('single');
+  const [selectedChapterSprintSubject, setSelectedChapterSprintSubject] = useState<string>(
+    initialSubject || subjects[0]?.name || ''
+  );
+  const selectedSprintSubject = subjects.find(s => s.name === selectedChapterSprintSubject) || subjects[0];
+  const [selectedSingleChapterName, setSelectedSingleChapterName] = useState<string>(
+    initialChapter || selectedSprintSubject?.chapters[0]?.name || ''
+  );
+  const [selectedMultiChapterNames, setSelectedMultiChapterNames] = useState<string[]>(() => {
+    const firstSub = subjects.find(s => s.name === (initialSubject || subjects[0]?.name));
+    return firstSub?.chapters.slice(0, 2).map(c => c.name) || [];
+  });
+  const [chapterSprintGoal, setChapterSprintGoal] = useState<'test' | 'revision' | 'past_papers' | 'deep_study'>('revision');
+
+  // Rupex / Rubric upload state for AI Blender
+  const [rubricFile, setRubricFile] = useState<{
+    id: string;
+    name: string;
+    base64: string;
+    mimeType: string;
+    previewUrl: string;
+    sizeFormatted: string;
+  } | null>(null);
+  const rubricInputRef = useRef<HTMLInputElement>(null);
 
   // Topic selection state
   const [selectedSubjectName, setSelectedSubjectName] = useState<string>(
@@ -179,6 +282,13 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
 
   // Focus Mode & Ambient Audio state
   const [isFocusMode, setIsFocusMode] = useState<boolean>(false);
+  const [isSimpleTimerMode, setIsSimpleTimerMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('studyflow_simple_timer_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [isAmbientSoundOn, setIsAmbientSoundOn] = useState<boolean>(true);
   const [ambientSoundType, setAmbientSoundType] = useState<'white' | 'pink' | 'rain'>('white');
   const [ambientVolume, setAmbientVolume] = useState<number>(0.15); // 15% volume
@@ -263,6 +373,12 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
   const [loggedMistakeGaps, setLoggedMistakeGaps] = useState<Record<number, boolean>>({});
   const [isDrillModalOpen, setIsDrillModalOpen] = useState<boolean>(false);
 
+  // Study Session Quality Score & Deep Work Metrics
+  const [distractionCount, setDistractionCount] = useState<number>(0);
+  const [difficultyRating, setDifficultyRating] = useState<'Introductory' | 'Standard' | 'Rigorous' | 'Past Paper Level'>('Standard');
+  const [activeRecallScore, setActiveRecallScore] = useState<number>(85); // 0-100%
+  const [outputSummary, setOutputSummary] = useState<string>('');
+
   // Update chapter/topic dropdowns when subject/chapter/topic props change
   useEffect(() => {
     if (initialSubject && subjects.some(s => s.name === initialSubject)) {
@@ -337,6 +453,43 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
   const [isActive, setIsActive] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
 
+  const sessionQualityScore = useMemo(() => {
+    // 1. Focus consistency: deduction per distraction
+    const focusFactor = Math.max(20, 100 - (distractionCount * 12));
+    
+    // 2. Duration factor: optimal deep work plateau between 25 and 90 minutes
+    const elapsedMinutes = Math.max(1, Math.round(((targetMinutes * 60) - secondsLeft) / 60));
+    const durationFactor = Math.min(100, Math.max(40, Math.round((elapsedMinutes / 35) * 100)));
+
+    // 3. Difficulty rating
+    const difficultyMap: Record<string, number> = {
+      'Introductory': 70,
+      'Standard': 85,
+      'Rigorous': 95,
+      'Past Paper Level': 100
+    };
+    const diffScore = difficultyMap[difficultyRating] || 85;
+
+    // 4. Active recall score
+    const recallFactor = Math.min(100, Math.max(0, activeRecallScore));
+
+    // Weighted combination: Focus 35%, Duration 20%, Difficulty 20%, Active Recall 25%
+    const score = Math.round(
+      (focusFactor * 0.35) + 
+      (durationFactor * 0.20) + 
+      (diffScore * 0.20) + 
+      (recallFactor * 0.25)
+    );
+    return Math.min(100, Math.max(10, score));
+  }, [distractionCount, targetMinutes, secondsLeft, difficultyRating, activeRecallScore]);
+
+  const deepWorkRating = useMemo<'Deep Work' | 'Moderate Focus' | 'Fragmented' | 'Shallow'>(() => {
+    if (sessionQualityScore >= 85) return 'Deep Work';
+    if (sessionQualityScore >= 70) return 'Moderate Focus';
+    if (sessionQualityScore >= 50) return 'Fragmented';
+    return 'Shallow';
+  }, [sessionQualityScore]);
+
   // Dynamic Theme Colors for Timer (Sage/Classic/Emerald/Amber)
   const timerThemeClasses = useMemo(() => {
     switch (timerColorTheme) {
@@ -404,6 +557,46 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
   const [sendWhatsAppOnFinish, setSendWhatsAppOnFinish] = useState<boolean>(() => !!(userProfile?.whatsappNumber));
   const [recipientPhoneInput, setRecipientPhoneInput] = useState<string>(() => userProfile?.whatsappNumber || '');
 
+  // 1-Time Google Tasks Transfer State
+  const [isTransferringToGoogleTasks, setIsTransferringToGoogleTasks] = useState<boolean>(false);
+  const [isGoogleTasksTransferredSession, setIsGoogleTasksTransferredSession] = useState<boolean>(false);
+
+  // Transfer ONLY this single study session to Google Tasks (1-Time rule)
+  const handleTransferCurrentSessionToGoogleTasks = async (sessionToTransfer: any) => {
+    if (!sessionToTransfer) return;
+    setIsTransferringToGoogleTasks(true);
+    try {
+      const sessionId = `session-${sessionToTransfer.date}-${sessionToTransfer.startTime}-${sessionToTransfer.topicName}`.replace(/[^a-zA-Z0-9-]/g, '_');
+      const res = await transferSingleTaskToGoogleTasks({
+        id: sessionId,
+        type: 'session',
+        title: `⚡ [${sessionToTransfer.subjectName}] ${sessionToTransfer.topicName} (${sessionToTransfer.durationMinutes}m)`,
+        notes: `Chapter: ${sessionToTransfer.chapterName}\nFinished at: ${sessionToTransfer.endTime}\nDate: ${sessionToTransfer.date}\nNotes: ${sessionToTransfer.notes || 'None'}`,
+        dueDate: sessionToTransfer.date,
+        completed: true
+      });
+      setIsGoogleTasksTransferredSession(true);
+      if (res.status === 'already_transferred') {
+        setEmailNotification({
+          type: 'info',
+          text: `Google Tasks: ${res.message}`
+        });
+      } else {
+        setEmailNotification({
+          type: 'success',
+          text: `Google Tasks: ${res.message}`
+        });
+      }
+    } catch (err: any) {
+      setEmailNotification({
+        type: 'error',
+        text: err.message || 'Could not transfer session to Google Tasks.'
+      });
+    } finally {
+      setIsTransferringToGoogleTasks(false);
+    }
+  };
+
   // Relevant subject notes to pass into AI evaluation
   const relevantNotes = useMemo(() => {
     if (!notes || notes.length === 0) return '';
@@ -438,6 +631,84 @@ export const StudyTimerView: React.FC<StudyTimerViewProps> = ({
       setBlurtPrompt(`Explain the core principles, key definitions, equations, and main examiner pitfalls for ${selectedTopicName}.`);
     } finally {
       setIsGeneratingPrompt(false);
+    }
+  };
+
+  // Handle Rupex / Rubric upload for AI Blender
+  const handleUploadRubric = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      const base64 = dataUrl.split(',')[1] || '';
+      const sizeKb = Math.round(file.size / 1024);
+      setRubricFile({
+        id: `rubric-${Date.now()}`,
+        name: file.name,
+        base64,
+        mimeType: file.type || 'image/png',
+        previewUrl: dataUrl,
+        sizeFormatted: sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`
+      });
+      setBlurtSuccessMsg(`Rupex / Marking Rubric "${file.name}" uploaded successfully! AI will grade recall against these criteria.`);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveCurrentRupexToLocker = () => {
+    if (!rubricFile) return;
+    const newItem = {
+      ...rubricFile,
+      subjectName: selectedSubjectName,
+      chapterName: selectedChapterName,
+      uploadedAt: new Date().toISOString()
+    };
+    const updated = [newItem, ...savedRupexList.filter(r => r.name !== rubricFile.name)];
+    setSavedRupexList(updated);
+    try {
+      localStorage.setItem('studyflow_rupex_vault_v1', JSON.stringify(updated));
+      setBlurtSuccessMsg(`✓ Rupex "${rubricFile.name}" saved to your permanent Rupex Locker!`);
+    } catch (e) {
+      console.warn('Locker save note:', e);
+    }
+  };
+
+  const handleDeleteRupexFromLocker = (id: string) => {
+    const updated = savedRupexList.filter(r => r.id !== id);
+    setSavedRupexList(updated);
+    try {
+      localStorage.setItem('studyflow_rupex_vault_v1', JSON.stringify(updated));
+    } catch (e) {}
+  };
+
+  const handleSelectRupexFromLocker = (item: any) => {
+    setRubricFile(item);
+    setIsRupexLockerOpen(false);
+    setBlurtSuccessMsg(`✓ Rupex "${item.name}" loaded from locker and attached to AI Blender!`);
+  };
+
+  // 1-Click Preset High-Yield Questions (No typing needed)
+  const handleSelectPresetQuestion = (type: 'definitions' | 'formulas' | 'traps' | 'numerical' | 'summary' | 'questions5') => {
+    const topic = selectedTopicName || 'this topic';
+    const ch = selectedChapterName || 'this chapter';
+    switch (type) {
+      case 'definitions':
+        setBlurtPrompt(`Explain the primary definitions, fundamental physical laws, and exact examiner keyword requirements for ${topic}.`);
+        break;
+      case 'formulas':
+        setBlurtPrompt(`State and derive all governing equations, SI units, and step-by-step working derivations for ${topic}.`);
+        break;
+      case 'traps':
+        setBlurtPrompt(`List the top 3 examiner misconceptions, sign convention mistakes, and common past paper calculation traps for ${topic}.`);
+        break;
+      case 'numerical':
+        setBlurtPrompt(`Solve a standard 5-mark past paper examination problem on ${topic}, showing all given data, formulas, steps, and final units.`);
+        break;
+      case 'summary':
+        setBlurtPrompt(`Provide a complete synoptic active recall summary of ${ch} — connecting core concepts, formulas, and real-world exam applications.`);
+        break;
+      case 'questions5':
+        setBlurtPrompt(`Answer the following 5 high-yield questions on ${topic}:\n1. State the fundamental definition / principle.\n2. Write down the primary formula and define each variable.\n3. What is the standard SI unit and dimensional formula?\n4. What happens when key variables increase or decrease?\n5. State two real-world applications or past-paper exam traps.`);
+        break;
     }
   };
 
@@ -970,6 +1241,48 @@ Return JSON formatted with:
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isActive, isPaused, isFullscreenFocus, isFocusMode, selectedTopicName]);
 
+  // Synchronize timer state with global background persistence for seamless tab switching
+  useEffect(() => {
+    if (isActive) {
+      persistRunningTimer({
+        isRunning: true,
+        isPaused: isPaused,
+        mode: 'focus',
+        subjectName: selectedSubjectName || 'Study Session',
+        topicName: selectedTopicName || '',
+        targetSeconds: targetMinutes * 60,
+        secondsLeft: secondsLeft,
+        startedAtTimestamp: Date.now(),
+        targetEndTimestamp: Date.now() + (secondsLeft * 1000),
+        lastTickTimestamp: Date.now()
+      });
+    } else if (secondsLeft === targetMinutes * 60) {
+      clearRunningTimer();
+    }
+  }, [isActive, isPaused, secondsLeft, targetMinutes, selectedSubjectName, selectedTopicName]);
+
+  // Read persisted timer on mount and listen to cross-screen / builder app timer sync events
+  useEffect(() => {
+    const handleRemoteTimerSync = (e?: any) => {
+      const persisted = e?.detail !== undefined ? e.detail : getPersistedTimer();
+      if (persisted && persisted.isRunning && persisted.secondsLeft > 0) {
+        setSecondsLeft(persisted.secondsLeft);
+        setTargetMinutes(Math.max(1, Math.round(persisted.targetSeconds / 60)));
+        setIsActive(true);
+        setIsPaused(persisted.isPaused);
+        if (persisted.topicName) setSelectedTopicName(persisted.topicName);
+        if (persisted.subjectName) setSelectedSubjectName(persisted.subjectName);
+      } else if (persisted === null) {
+        setIsActive(false);
+        setIsPaused(false);
+      }
+    };
+
+    handleRemoteTimerSync();
+    window.addEventListener('studyplanner:timer-update', handleRemoteTimerSync);
+    return () => window.removeEventListener('studyplanner:timer-update', handleRemoteTimerSync);
+  }, []);
+
   // Timer interval tick
   useEffect(() => {
     let interval: any = null;
@@ -1004,6 +1317,397 @@ Return JSON formatted with:
     }
     return () => clearInterval(interval);
   }, [isActive, isPaused, targetMinutes, autoStartBreak]);
+
+  // Web Audio Exam Pressure Alert Chime (2 or 3 short crisp rings)
+  const playExamChime = (rings: number = 3) => {
+    if (!mcqAudioChimeEnabled) return;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      for (let i = 0; i < rings; i++) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        const freq = i === 0 ? 880 : i === 1 ? 1174 : 1760;
+        const startT = now + i * 0.18;
+        osc.frequency.setValueAtTime(freq, startT);
+        gain.gain.setValueAtTime(0.28, startT);
+        gain.gain.exponentialRampToValueAtTime(0.001, startT + 0.15);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(startT);
+        osc.stop(startT + 0.16);
+      }
+    } catch (e) {
+      console.warn('Audio chime warning:', e);
+    }
+  };
+
+  // Printable Academic Monthly Wall Calendar Generator with Physical Check-Off Boxes
+  const handlePrintWallCalendar = () => {
+    try {
+      openStudyKitPrintWindow({
+        format: 'monthly_wall_calendar',
+        selectedSubjectNames: subjects ? subjects.map(s => s.name) : [],
+        includeFormulas: true,
+        includeMnemonics: true,
+        includeFlashcards: false,
+        includeExams: true,
+        columns: 2,
+        fontSize: 'standard',
+        title: `Academic Monthly Wall Calendar — ${new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}`,
+        notes: 'Monthly physical study calendar: check off daily boxes for study hours, active recall, MCQ blitz, and done ✓.'
+      }, {
+        subjects: subjects || [],
+        flashcardDecks: [],
+        plans: plans || [],
+        userProfile: userProfile || null,
+        revisions: []
+      });
+      setEmailNotification({
+        type: 'success',
+        text: '✓ Printable Monthly Academic Wall Calendar with mark-off boxes opened in print preview!'
+      });
+    } catch (e: any) {
+      setEmailNotification({
+        type: 'error',
+        text: `Wall calendar print failed: ${e.message}`
+      });
+    }
+  };
+
+  // Exam Audio Recording Timer Interval
+  useEffect(() => {
+    let recTimer: any = null;
+    if (isExamAudioRecording) {
+      recTimer = setInterval(() => {
+        setRecordingSeconds(s => s + 1);
+      }, 1000);
+    }
+    return () => clearInterval(recTimer);
+  }, [isExamAudioRecording]);
+
+  const toggleExamAudioRecording = (qIndex: number, type: 'short' | 'long') => {
+    if (isExamAudioRecording) {
+      setIsExamAudioRecording(false);
+      const duration = recordingSeconds;
+      if (type === 'short') {
+        setSqAudioRecordings(prev => ({
+          ...prev,
+          [qIndex]: { isRecorded: true, duration }
+        }));
+      } else {
+        setLqAudioRecordings(prev => ({
+          ...prev,
+          [qIndex]: { isRecorded: true, duration }
+        }));
+      }
+      playExamChime(1);
+    } else {
+      setRecordingSeconds(0);
+      setIsExamAudioRecording(true);
+    }
+  };
+
+  // Exam Pressure Pacing Timer Interval (High-Precision 100ms countdown for MCQ, Short & Long Questions)
+  useEffect(() => {
+    let timer: any = null;
+    if (mcqIsActive && !mcqIsPaused && !mcqIsFinished) {
+      timer = setInterval(() => {
+        setMcqTotalElapsedSeconds(t => Number((t + 0.1).toFixed(1)));
+
+        if (mcqIsBufferActive) {
+          setMcqBufferSecondsLeft(prev => {
+            const next = Number((prev - 0.1).toFixed(1));
+            if (next <= 0.05) {
+              setMcqIsBufferActive(false);
+
+              if (examPressureType === 'mcq') {
+                setMcqCurrentIndex(idx => {
+                  const nextIdx = idx + 1;
+                  if (nextIdx > mcqTotalCount) {
+                    setMcqIsActive(false);
+                    setMcqIsFinished(true);
+                    playExamChime(2);
+                    return idx;
+                  }
+                  setMcqQuestionSecondsLeft(mcqSecondsPerQuestion);
+                  return nextIdx;
+                });
+              } else if (examPressureType === 'short_question') {
+                setSqCurrentIndex(idx => {
+                  const nextIdx = idx + 1;
+                  if (nextIdx > sqTotalCount) {
+                    setMcqIsActive(false);
+                    setMcqIsFinished(true);
+                    playExamChime(2);
+                    return idx;
+                  }
+                  setSqSecondsLeft(sqMinutesPerQuestion * 60);
+                  return nextIdx;
+                });
+              } else if (examPressureType === 'long_question') {
+                setLqCurrentIndex(idx => {
+                  const nextIdx = idx + 1;
+                  if (nextIdx > lqTotalCount) {
+                    setMcqIsActive(false);
+                    setMcqIsFinished(true);
+                    playExamChime(2);
+                    return idx;
+                  }
+                  setLqSecondsLeft(lqMinutesPerQuestion * 60);
+                  return nextIdx;
+                });
+              }
+              return 0;
+            }
+            return next;
+          });
+        } else {
+          // ACTIVE QUESTION COUNTDOWN
+          if (examPressureType === 'mcq') {
+            setMcqQuestionSecondsLeft(prev => {
+              const next = Number((prev - 0.1).toFixed(1));
+              if (next <= 0.05) {
+                // 3 rings audio chime as requested!
+                playExamChime(3);
+
+                setMcqAnswers(old => {
+                  if (!old[mcqCurrentIndex]) {
+                    return { ...old, [mcqCurrentIndex]: 'OVERTIME' };
+                  }
+                  return old;
+                });
+
+                setMcqQuestionTimes(old => ({
+                  ...old,
+                  [mcqCurrentIndex]: mcqSecondsPerQuestion
+                }));
+
+                if (mcqCurrentIndex >= mcqTotalCount) {
+                  setMcqIsActive(false);
+                  setMcqIsFinished(true);
+                  return 0;
+                }
+
+                // Enter 1 to 3 seconds buffer before moving to next question (strictly max 3s)
+                setMcqIsBufferActive(true);
+                setMcqBufferSecondsLeft(mcqBufferSeconds);
+                return 0;
+              }
+              return next;
+            });
+          } else if (examPressureType === 'short_question') {
+            setSqSecondsLeft(prev => {
+              const next = Number((prev - 0.1).toFixed(1));
+              // 30-second warning bell
+              if (Math.abs(next - 30.0) < 0.05) {
+                playExamChime(1);
+              }
+              if (next <= 0.05) {
+                playExamChime(3);
+                if (isExamAudioRecording) {
+                  setIsExamAudioRecording(false);
+                  setSqAudioRecordings(r => ({ ...r, [sqCurrentIndex]: { isRecorded: true, duration: recordingSeconds } }));
+                }
+                if (sqCurrentIndex >= sqTotalCount) {
+                  setMcqIsActive(false);
+                  setMcqIsFinished(true);
+                  return 0;
+                }
+                setMcqIsBufferActive(true);
+                setMcqBufferSecondsLeft(mcqBufferSeconds);
+                return 0;
+              }
+              return next;
+            });
+          } else if (examPressureType === 'long_question') {
+            setLqSecondsLeft(prev => {
+              const next = Number((prev - 0.1).toFixed(1));
+              const halfTime = (lqMinutesPerQuestion * 60) / 2;
+              if (Math.abs(next - halfTime) < 0.05) {
+                playExamChime(1);
+              }
+              if (Math.abs(next - 120.0) < 0.05) {
+                playExamChime(2);
+              }
+              if (next <= 0.05) {
+                playExamChime(3);
+                if (isExamAudioRecording) {
+                  setIsExamAudioRecording(false);
+                  setLqAudioRecordings(r => ({ ...r, [lqCurrentIndex]: { isRecorded: true, duration: recordingSeconds } }));
+                }
+                if (lqCurrentIndex >= lqTotalCount) {
+                  setMcqIsActive(false);
+                  setMcqIsFinished(true);
+                  return 0;
+                }
+                setMcqIsBufferActive(true);
+                setMcqBufferSecondsLeft(mcqBufferSeconds);
+                return 0;
+              }
+              return next;
+            });
+          }
+        }
+      }, 100);
+    }
+    return () => clearInterval(timer);
+  }, [
+    mcqIsActive,
+    mcqIsPaused,
+    mcqIsFinished,
+    mcqIsBufferActive,
+    mcqCurrentIndex,
+    mcqTotalCount,
+    mcqSecondsPerQuestion,
+    mcqBufferSeconds,
+    mcqAudioChimeEnabled,
+    examPressureType,
+    sqCurrentIndex,
+    sqTotalCount,
+    sqMinutesPerQuestion,
+    lqCurrentIndex,
+    lqTotalCount,
+    lqMinutesPerQuestion,
+    isExamAudioRecording,
+    recordingSeconds
+  ]);
+
+  const handleStartExamPressureSprint = () => {
+    setMcqTotalElapsedSeconds(0);
+    setMcqIsFinished(false);
+    setMcqIsBufferActive(false);
+    setMcqIsActive(true);
+    setMcqIsPaused(false);
+    setIsExamAudioRecording(false);
+    setRecordingSeconds(0);
+
+    if (examPressureType === 'mcq') {
+      setMcqCurrentIndex(1);
+      setMcqQuestionSecondsLeft(mcqSecondsPerQuestion);
+      setMcqAnswers({});
+      setMcqQuestionTimes({});
+    } else if (examPressureType === 'short_question') {
+      setSqCurrentIndex(1);
+      setSqSecondsLeft(sqMinutesPerQuestion * 60);
+      setSqAnswersText({});
+      setSqAudioRecordings({});
+    } else if (examPressureType === 'long_question') {
+      setLqCurrentIndex(1);
+      setLqSecondsLeft(lqMinutesPerQuestion * 60);
+      setLqAnswersText({});
+      setLqAudioRecordings({});
+      setLqMilestones({});
+    } else if (examPressureType === 'mixed_board') {
+      setMcqCurrentIndex(1);
+      setMcqQuestionSecondsLeft(45);
+      setMcqAnswers({});
+    }
+  };
+
+  const handleSelectShortQuestionNext = () => {
+    if (isExamAudioRecording) {
+      setIsExamAudioRecording(false);
+      setSqAudioRecordings(r => ({ ...r, [sqCurrentIndex]: { isRecorded: true, duration: recordingSeconds } }));
+    }
+    if (sqCurrentIndex < sqTotalCount) {
+      setSqCurrentIndex(prev => prev + 1);
+      setSqSecondsLeft(sqMinutesPerQuestion * 60);
+    } else {
+      setMcqIsActive(false);
+      setMcqIsFinished(true);
+      playExamChime(2);
+    }
+  };
+
+  const handleSelectLongQuestionNext = () => {
+    if (isExamAudioRecording) {
+      setIsExamAudioRecording(false);
+      setLqAudioRecordings(r => ({ ...r, [lqCurrentIndex]: { isRecorded: true, duration: recordingSeconds } }));
+    }
+    if (lqCurrentIndex < lqTotalCount) {
+      setLqCurrentIndex(prev => prev + 1);
+      setLqSecondsLeft(lqMinutesPerQuestion * 60);
+    } else {
+      setMcqIsActive(false);
+      setMcqIsFinished(true);
+      playExamChime(2);
+    }
+  };
+
+  const handleToggleLqMilestone = (qIdx: number, stage: 'intro' | 'derivation' | 'diagram' | 'units') => {
+    setLqMilestones(prev => {
+      const curr = prev[qIdx] || { intro: false, derivation: false, diagram: false, units: false };
+      return {
+        ...prev,
+        [qIdx]: {
+          ...curr,
+          [stage]: !curr[stage]
+        }
+      };
+    });
+  };
+
+  const handleSelectMcqAnswer = (ans: string) => {
+    setMcqAnswers(prev => ({ ...prev, [mcqCurrentIndex]: ans }));
+    const timeSpent = mcqSecondsPerQuestion - mcqQuestionSecondsLeft;
+    setMcqQuestionTimes(prev => ({ ...prev, [mcqCurrentIndex]: Math.max(1, timeSpent) }));
+
+    // Instant advance if student solved question early
+    if (mcqCurrentIndex < mcqTotalCount) {
+      setMcqCurrentIndex(prev => prev + 1);
+      setMcqQuestionSecondsLeft(mcqSecondsPerQuestion);
+    } else {
+      setMcqIsActive(false);
+      setMcqIsFinished(true);
+      playExamChime(2);
+    }
+  };
+
+  const handleSkipMcqQuestion = () => {
+    setMcqAnswers(prev => ({ ...prev, [mcqCurrentIndex]: 'SKIPPED' }));
+    if (mcqCurrentIndex < mcqTotalCount) {
+      setMcqCurrentIndex(prev => prev + 1);
+      setMcqQuestionSecondsLeft(mcqSecondsPerQuestion);
+    } else {
+      setMcqIsActive(false);
+      setMcqIsFinished(true);
+      playExamChime(2);
+    }
+  };
+
+  const handleFlagMcqQuestion = () => {
+    setMcqAnswers(prev => ({
+      ...prev,
+      [mcqCurrentIndex]: prev[mcqCurrentIndex] ? `${prev[mcqCurrentIndex]} (FLAGGED)` : 'FLAGGED'
+    }));
+  };
+
+  const handleSaveMcqAsMockTest = () => {
+    const elapsedMins = Math.max(1, Math.round(mcqTotalElapsedSeconds / 60));
+    const todayStr = new Date().toISOString().split('T')[0];
+    const subName = mcqSelectedSubject || selectedSubjectName;
+    const chapName = mcqSelectedChapter || selectedChapterName;
+
+    onSaveSession({
+      subjectName: subName,
+      chapterName: chapName,
+      topicName: `MCQ Exam Pacer Sprint (${mcqTotalCount} Questions)`,
+      durationMinutes: elapsedMins,
+      startTime: new Date(Date.now() - mcqTotalElapsedSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      endTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      date: todayStr,
+      notes: `Attempted ${mcqTotalCount} MCQs at benchmark ${mcqSecondsPerQuestion}s/question. Total time: ${elapsedMins} mins.`
+    });
+
+    setEmailNotification({
+      type: 'success',
+      text: `✓ MCQ Exam Pacer session (${elapsedMins} mins) saved to Study Vault and Revision history!`
+    });
+  };
 
   const handleSetPreset = (mins: number) => {
     if (isActive) return;
@@ -1248,11 +1952,30 @@ Return JSON formatted with:
 
     const finalDuration = Math.max(1, sessionLoggedMinutes);
 
-    const combinedNotes = feynmanBlurt.trim()
-      ? `Feynman Blurt: "${feynmanBlurt.trim()}". ${sessionNotes ? `Notes: ${sessionNotes}` : ''}`
-      : sessionNotes;
+    const isChapterSprint = activeMode === 'chapter_sprint';
+    const subName = isChapterSprint ? selectedChapterSprintSubject : selectedSubjectName;
+    const chapName = isChapterSprint
+      ? (chapterScope === 'multi' ? (selectedMultiChapterNames.join(', ') || 'Multi-Chapter') : selectedSingleChapterName)
+      : selectedChapterName;
+    const goalTitle = chapterSprintGoal === 'test' ? 'Mock Test'
+      : chapterSprintGoal === 'past_papers' ? 'Past Papers'
+      : chapterSprintGoal === 'deep_study' ? 'Deep Study'
+      : 'Comprehensive Revision';
+    const topName = isChapterSprint
+      ? (chapterScope === 'multi'
+          ? `Multi-Chapter Sprint [${goalTitle}]: ${selectedMultiChapterNames.length} Chapters`
+          : `Full Chapter Sprint [${goalTitle}]: ${selectedSingleChapterName}`)
+      : selectedTopicName;
 
-    const sloObj = selectedTopic?.subtopics?.find(s => s.sloCode === selectedSloCode);
+    const sprintNotePrefix = isChapterSprint
+      ? `[${goalTitle}] ${chapterScope === 'multi' ? `Multi-Chapter: ${selectedMultiChapterNames.join(', ')}` : `Chapter: ${selectedSingleChapterName}`}. `
+      : '';
+
+    const combinedNotes = feynmanBlurt.trim()
+      ? `${sprintNotePrefix}Feynman Blurt: "${feynmanBlurt.trim()}". ${sessionNotes ? `Notes: ${sessionNotes}` : ''}`
+      : `${sprintNotePrefix}${sessionNotes}`.trim();
+
+    const sloObj = isChapterSprint ? undefined : selectedTopic?.subtopics?.find(s => s.sloCode === selectedSloCode);
 
     const sessionPayload: Omit<StudySession, 'id'> = {
       userId: '',
@@ -1260,15 +1983,22 @@ Return JSON formatted with:
       startTime: startTimeStr,
       endTime: endTimeStr,
       durationMinutes: finalDuration,
-      subjectName: selectedSubjectName,
-      chapterName: selectedChapterName,
-      topicName: selectedTopicName,
-      sloCode: selectedSloCode || undefined,
+      subjectName: subName,
+      chapterName: chapName,
+      topicName: topName,
+      sloCode: sloObj?.sloCode || undefined,
       sloName: sloObj?.name || undefined,
       addedTo137: addTo137OnFinish,
       result: selectedResult,
       notes: combinedNotes,
-      timestamp: startTimestampRef.current || Date.now()
+      timestamp: startTimestampRef.current || Date.now(),
+      qualityScore: sessionQualityScore,
+      deepWorkRating,
+      focusPercentage: Math.max(20, 100 - (distractionCount * 12)),
+      distractionCount,
+      difficultyRating,
+      activeRecallScore,
+      outputSummary: outputSummary.trim() || undefined
     };
 
     onSaveSession(sessionPayload);
@@ -1278,16 +2008,69 @@ Return JSON formatted with:
     });
 
     if (addTo137OnFinish && onAddTo137Cycle) {
-      onAddTo137Cycle({
-        subjectName: selectedSubjectName,
-        chapterName: selectedChapterName,
-        topicName: selectedTopicName,
-        sloCode: selectedSloCode || undefined,
-        sloName: sloObj?.name || undefined,
-        studyDate: todayStr,
-        timeSpentMinutes: finalDuration,
-        notes: combinedNotes
-      });
+      if (isChapterSprint) {
+        const curSub = subjects.find(s => s.name === subName);
+        if (chapterScope === 'single') {
+          const chObj = curSub?.chapters.find(c => c.name === selectedSingleChapterName);
+          if (chObj && chObj.topics.length > 0) {
+            chObj.topics.forEach(t => {
+              onAddTo137Cycle({
+                subjectName: subName,
+                chapterName: selectedSingleChapterName,
+                topicName: t.name,
+                studyDate: todayStr,
+                timeSpentMinutes: Math.max(1, Math.round(finalDuration / chObj.topics.length)),
+                notes: combinedNotes
+              });
+            });
+          } else {
+            onAddTo137Cycle({
+              subjectName: subName,
+              chapterName: chapName,
+              topicName: topName,
+              studyDate: todayStr,
+              timeSpentMinutes: finalDuration,
+              notes: combinedNotes
+            });
+          }
+        } else {
+          selectedMultiChapterNames.forEach(cn => {
+            const chObj = curSub?.chapters.find(c => c.name === cn);
+            if (chObj && chObj.topics.length > 0) {
+              chObj.topics.forEach(t => {
+                onAddTo137Cycle({
+                  subjectName: subName,
+                  chapterName: cn,
+                  topicName: t.name,
+                  studyDate: todayStr,
+                  timeSpentMinutes: Math.max(1, Math.round(finalDuration / (selectedMultiChapterNames.length * chObj.topics.length))),
+                  notes: combinedNotes
+                });
+              });
+            } else {
+              onAddTo137Cycle({
+                subjectName: subName,
+                chapterName: cn,
+                topicName: `Chapter Revision: ${cn}`,
+                studyDate: todayStr,
+                timeSpentMinutes: Math.max(1, Math.round(finalDuration / selectedMultiChapterNames.length)),
+                notes: combinedNotes
+              });
+            }
+          });
+        }
+      } else {
+        onAddTo137Cycle({
+          subjectName: selectedSubjectName,
+          chapterName: selectedChapterName,
+          topicName: selectedTopicName,
+          sloCode: selectedSloCode || undefined,
+          sloName: sloObj?.name || undefined,
+          studyDate: todayStr,
+          timeSpentMinutes: finalDuration,
+          notes: combinedNotes
+        });
+      }
     }
 
     setIsFinishModalOpen(false);
@@ -1306,7 +2089,7 @@ Return JSON formatted with:
     } else {
       setEmailNotification({
         type: 'info',
-        text: `Session saved! (${finalDuration}m on ${selectedTopicName})${addTo137OnFinish ? ' + Added to 1-3-7 Spaced Revision' : ''}.`
+        text: `Session saved! (${finalDuration}m on ${topName})${addTo137OnFinish ? ' + Added to 1-3-7 Spaced Revision' : ''}.`
       });
     }
   };
@@ -1318,11 +2101,30 @@ Return JSON formatted with:
     const startTimeStr = startTimeRef.current || endNow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const finalDuration = Math.max(1, sessionLoggedMinutes);
 
-    const combinedNotes = feynmanBlurt.trim()
-      ? `Feynman Blurt: "${feynmanBlurt.trim()}". ${sessionNotes ? `Notes: ${sessionNotes}` : ''}`
-      : sessionNotes;
+    const isChapterSprint = activeMode === 'chapter_sprint';
+    const subName = isChapterSprint ? selectedChapterSprintSubject : selectedSubjectName;
+    const chapName = isChapterSprint
+      ? (chapterScope === 'multi' ? (selectedMultiChapterNames.join(', ') || 'Multi-Chapter') : selectedSingleChapterName)
+      : selectedChapterName;
+    const goalTitle = chapterSprintGoal === 'test' ? 'Mock Test'
+      : chapterSprintGoal === 'past_papers' ? 'Past Papers'
+      : chapterSprintGoal === 'deep_study' ? 'Deep Study'
+      : 'Comprehensive Revision';
+    const topName = isChapterSprint
+      ? (chapterScope === 'multi'
+          ? `Multi-Chapter Sprint [${goalTitle}]: ${selectedMultiChapterNames.length} Chapters`
+          : `Full Chapter Sprint [${goalTitle}]: ${selectedSingleChapterName}`)
+      : selectedTopicName;
 
-    const sloObj = selectedTopic?.subtopics?.find(s => s.sloCode === selectedSloCode);
+    const sprintNotePrefix = isChapterSprint
+      ? `[${goalTitle}] ${chapterScope === 'multi' ? `Multi-Chapter: ${selectedMultiChapterNames.join(', ')}` : `Chapter: ${selectedSingleChapterName}`}. `
+      : '';
+
+    const combinedNotes = feynmanBlurt.trim()
+      ? `${sprintNotePrefix}Feynman Blurt: "${feynmanBlurt.trim()}". ${sessionNotes ? `Notes: ${sessionNotes}` : ''}`
+      : `${sprintNotePrefix}${sessionNotes}`.trim();
+
+    const sloObj = isChapterSprint ? undefined : selectedTopic?.subtopics?.find(s => s.sloCode === selectedSloCode);
 
     const sessionPayload: Omit<StudySession, 'id'> = {
       userId: '',
@@ -1330,15 +2132,22 @@ Return JSON formatted with:
       startTime: startTimeStr,
       endTime: endTimeStr,
       durationMinutes: finalDuration,
-      subjectName: selectedSubjectName,
-      chapterName: selectedChapterName,
-      topicName: selectedTopicName,
-      sloCode: selectedSloCode || undefined,
+      subjectName: subName,
+      chapterName: chapName,
+      topicName: topName,
+      sloCode: sloObj?.sloCode || undefined,
       sloName: sloObj?.name || undefined,
       addedTo137: addTo137OnFinish,
       result: selectedResult,
       notes: combinedNotes,
-      timestamp: startTimestampRef.current || Date.now()
+      timestamp: startTimestampRef.current || Date.now(),
+      qualityScore: sessionQualityScore,
+      deepWorkRating,
+      focusPercentage: Math.max(20, 100 - (distractionCount * 12)),
+      distractionCount,
+      difficultyRating,
+      activeRecallScore,
+      outputSummary: outputSummary.trim() || undefined
     };
 
     onSaveSession(sessionPayload);
@@ -1348,17 +2157,27 @@ Return JSON formatted with:
     });
 
     if (addTo137OnFinish && onAddTo137Cycle) {
-      const sloObj = selectedTopic?.subtopics?.find(s => s.sloCode === selectedSloCode);
-      onAddTo137Cycle({
-        subjectName: selectedSubjectName,
-        chapterName: selectedChapterName,
-        topicName: selectedTopicName,
-        sloCode: selectedSloCode || undefined,
-        sloName: sloObj?.name || undefined,
-        studyDate: todayStr,
-        timeSpentMinutes: finalDuration,
-        notes: combinedNotes
-      });
+      if (isChapterSprint) {
+        onAddTo137Cycle({
+          subjectName: subName,
+          chapterName: chapName,
+          topicName: topName,
+          studyDate: todayStr,
+          timeSpentMinutes: finalDuration,
+          notes: combinedNotes
+        });
+      } else {
+        onAddTo137Cycle({
+          subjectName: selectedSubjectName,
+          chapterName: selectedChapterName,
+          topicName: selectedTopicName,
+          sloCode: selectedSloCode || undefined,
+          sloName: sloObj?.name || undefined,
+          studyDate: todayStr,
+          timeSpentMinutes: finalDuration,
+          notes: combinedNotes
+        });
+      }
     }
 
     setIsFinishModalOpen(false);
@@ -1409,6 +2228,49 @@ Return JSON formatted with:
         </div>
 
         <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-2.5 w-full sm:w-auto">
+          {/* Simple Timer Toggle */}
+          <button
+            onClick={() => {
+              const next = !isSimpleTimerMode;
+              setIsSimpleTimerMode(next);
+              try { localStorage.setItem('studyflow_simple_timer_mode', String(next)); } catch (e) {}
+            }}
+            className={`px-3 py-2.5 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs border min-h-[44px] ${
+              isSimpleTimerMode
+                ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30 ring-1 ring-amber-500/30'
+                : 'bg-theme-accent text-primary border-theme hover:opacity-85'
+            }`}
+            title="Toggle Simple Timer: Minimalist stopwatch view without distraction widgets"
+          >
+            <Sparkles className="w-4 h-4 text-amber-500" />
+            <span className="whitespace-nowrap">{isSimpleTimerMode ? 'Simple Timer' : 'Timer Mode'}</span>
+          </button>
+
+          {/* Log Offline Study Button */}
+          <button
+            onClick={() => {
+              setIsActive(false);
+              setSessionLoggedMinutes(targetMinutes || 45);
+              setIsFinishModalOpen(true);
+            }}
+            className="px-3.5 py-2.5 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs bg-primary text-primary-content hover:opacity-90 min-h-[44px] active:scale-95"
+            title="Log offline study session when studying without phone/iPad nearby"
+          >
+            <Edit3 className="w-4 h-4" />
+            <span className="whitespace-nowrap">Log Offline Study</span>
+          </button>
+
+          {/* Printable Wall Calendar with Check-Off Boxes */}
+          <button
+            type="button"
+            onClick={handlePrintWallCalendar}
+            className="px-3.5 py-2.5 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs bg-indigo-600 hover:bg-indigo-700 text-white min-h-[44px] active:scale-95"
+            title="Print Monthly Academic Wall Calendar with daily check-off boxes"
+          >
+            <Printer className="w-4 h-4" />
+            <span className="whitespace-nowrap">Print Wall Calendar</span>
+          </button>
+
           {/* Email Today's Total Button */}
           <button
             onClick={handleEmailTodayTotal}
@@ -1417,7 +2279,7 @@ Return JSON formatted with:
             title="Email today's total study session log to your Gmail"
           >
             {isSendingEmail ? <Loader2 className="w-4 h-4 animate-spin text-primary" /> : <Mail className="w-4 h-4 text-primary" />}
-            <span className="whitespace-nowrap">Email Today's Log</span>
+            <span className="whitespace-nowrap">Email Today</span>
           </button>
 
           {/* Focus Mode Toggle */}
@@ -1538,25 +2400,67 @@ Return JSON formatted with:
               <Zap className="w-3.5 h-3.5 text-amber-300" />
               <span>AI Blurt & Notes</span>
             </button>
+            <button
+              type="button"
+              onClick={() => handleTransferCurrentSessionToGoogleTasks(lastSavedSession)}
+              disabled={isTransferringToGoogleTasks}
+              className="px-3.5 py-2 rounded-xl bg-theme-surface hover:bg-theme-accent border border-theme text-primary text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 shadow-xs min-h-[38px] disabled:opacity-50"
+              title="Transfer ONLY this single study session to Google Tasks (1-Time, duplicates prevented)"
+            >
+              {isTransferringToGoogleTasks ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+              ) : isGoogleTasksTransferredSession ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[3]" />
+              ) : (
+                <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+              )}
+              <span>{isGoogleTasksTransferredSession ? 'Google Tasks (Transferred ✓)' : 'Transfer to Google Tasks (1-Time)'}</span>
+            </button>
           </div>
         </motion.div>
       )}
 
-      {/* Mode Switcher: Focus Timer vs Integrated AI Blurt & Notes Upload */}
+      {/* Mode Switcher: 4 Academic Engine Options + Focus Timer */}
       <motion.div variants={timerEntranceItemVariants} className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-1.5 p-1 bg-surface border border-theme rounded-2xl w-full sm:w-auto shadow-2xs">
+        <div className="flex items-center gap-1.5 p-1 bg-surface border border-theme rounded-2xl w-full sm:w-auto shadow-2xs overflow-x-auto">
+          {/* Option 1: Board Exam Pressure Pacer */}
           <button
             type="button"
-            onClick={() => setActiveMode('timer')}
-            className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer min-h-[40px] ${
-              activeMode === 'timer'
-                ? 'bg-primary text-white shadow-xs'
+            onClick={() => setActiveMode('mcq_pacer')}
+            className={`flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] whitespace-nowrap ${
+              activeMode === 'mcq_pacer'
+                ? 'bg-rose-600 text-white shadow-xs'
                 : 'text-muted hover:text-primary'
             }`}
           >
-            <Clock className="w-4 h-4" />
-            <span>Focus Timer</span>
+            <Target className="w-4 h-4 text-rose-300" />
+            <span>Option 1: Exam Pressure</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-rose-500/20 text-current font-mono font-bold">
+              {examPressureType === 'mcq'
+                ? `${mcqSecondsPerQuestion}s MCQ`
+                : examPressureType === 'short_question'
+                ? `${sqMinutesPerQuestion}m SQ`
+                : examPressureType === 'long_question'
+                ? `${lqMinutesPerQuestion}m LQ`
+                : 'Board Sim'}
+            </span>
           </button>
+
+          {/* Option 2: Full Chapter & Multi-Chapter Sprint */}
+          <button
+            type="button"
+            onClick={() => setActiveMode('chapter_sprint')}
+            className={`flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] whitespace-nowrap ${
+              activeMode === 'chapter_sprint'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-muted hover:text-primary'
+            }`}
+          >
+            <Layers className="w-4 h-4 text-emerald-300" />
+            <span>Option 2: Chapter Sprint</span>
+          </button>
+
+          {/* Option 3: AI Blurt & Notes Studio */}
           <button
             type="button"
             onClick={() => {
@@ -1565,21 +2469,57 @@ Return JSON formatted with:
                 handleGenerateBlurtPrompt();
               }
             }}
-            className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer min-h-[40px] ${
+            className={`flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] whitespace-nowrap ${
               activeMode === 'blurt'
-                ? 'bg-primary text-white shadow-xs'
+                ? 'bg-amber-600 text-white shadow-xs'
                 : 'text-muted hover:text-primary'
             }`}
           >
             <Zap className="w-4 h-4 text-amber-300" />
-            <span>AI Blurt & Notes Upload</span>
+            <span>Option 3: AI Blurt</span>
+          </button>
+
+          {/* Option 4: Rupex Rubric Locker & Saved Schemes */}
+          <button
+            type="button"
+            onClick={() => setActiveMode('rupex_locker')}
+            className={`flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] whitespace-nowrap ${
+              activeMode === 'rupex_locker'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-muted hover:text-primary'
+            }`}
+          >
+            <Award className="w-4 h-4 text-indigo-300" />
+            <span>Option 4: Rupex Locker</span>
+          </button>
+
+          {/* Classic Focus Timer */}
+          <button
+            type="button"
+            onClick={() => setActiveMode('timer')}
+            className={`flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] whitespace-nowrap ${
+              activeMode === 'timer'
+                ? 'bg-primary text-white shadow-xs'
+                : 'text-muted hover:text-primary'
+            }`}
+          >
+            <Clock className="w-4 h-4" />
+            <span>Topic Focus</span>
           </button>
         </div>
 
-        {/* Quick Topic Indicator */}
+        {/* Quick Topic / Chapter Indicator */}
         <div className="text-[11px] font-mono text-muted flex items-center gap-2">
-          <span>Target Topic:</span>
-          <span className="font-bold text-primary truncate max-w-[200px]">{selectedTopicName}</span>
+          <span>{activeMode === 'mcq_pacer' ? 'Pacer Goal:' : activeMode === 'chapter_sprint' ? 'Sprint Target:' : activeMode === 'rupex_locker' ? 'Rupex Schemes:' : 'Target Topic:'}</span>
+          <span className="font-bold text-primary truncate max-w-[220px]">
+            {activeMode === 'mcq_pacer'
+              ? `${mcqTotalCount} MCQ${mcqTotalCount === 1 ? '' : 's'} (${mcqSecondsPerQuestion}s/Q)`
+              : activeMode === 'chapter_sprint'
+              ? (chapterScope === 'multi' ? `${selectedMultiChapterNames.length} Chapters (${selectedMultiChapterNames.join(', ') || 'None'})` : selectedSingleChapterName)
+              : activeMode === 'rupex_locker'
+              ? (rubricFile ? rubricFile.name : `${savedRupexList.length} Rubrics Saved`)
+              : selectedTopicName}
+          </span>
         </div>
       </motion.div>
 
@@ -1594,8 +2534,152 @@ Return JSON formatted with:
             <div className="absolute inset-0 bg-primary/5 pointer-events-none animate-pulse"></div>
           )}
 
-          {/* If Focus Mode is activated, render the Distraction-Free Inline View */}
-          {isFocusMode ? (
+          {/* Simple Timer Mode / Minimalist Mode */}
+          {isSimpleTimerMode && !isFocusMode ? (
+            <div className="space-y-6 text-center py-4 sm:py-6">
+              <div className="flex items-center justify-between border-b border-theme/60 pb-3">
+                <div className="text-left">
+                  <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-500" />
+                    <span>Simple Timer Mode</span>
+                  </span>
+                  <span className="text-[11px] text-muted">Minimalist stopwatch & countdown without distraction widgets</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSimpleTimerMode(false);
+                    try { localStorage.setItem('studyflow_simple_timer_mode', 'false'); } catch (e) {}
+                  }}
+                  className="text-xs text-primary hover:underline font-bold cursor-pointer"
+                >
+                  Switch to Full Timer →
+                </button>
+              </div>
+
+              {/* Minimalist Subject & Topic Pickers */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 max-w-2xl mx-auto text-left text-xs">
+                <div>
+                  <label className="text-[10px] font-bold text-muted uppercase block mb-1">Subject</label>
+                  <select
+                    disabled={isActive}
+                    value={selectedSubjectName}
+                    onChange={(e) => setSelectedSubjectName(e.target.value)}
+                    className="w-full p-2.5 bg-surface border border-theme rounded-xl font-bold text-primary focus:outline-none"
+                  >
+                    {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-muted uppercase block mb-1">Chapter</label>
+                  <select
+                    disabled={isActive}
+                    value={selectedChapterName}
+                    onChange={(e) => setSelectedChapterName(e.target.value)}
+                    className="w-full p-2.5 bg-surface border border-theme rounded-xl font-bold text-primary focus:outline-none"
+                  >
+                    {selectedSubject?.chapters.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-muted uppercase block mb-1">Topic</label>
+                  <select
+                    disabled={isActive}
+                    value={selectedTopicName}
+                    onChange={(e) => setSelectedTopicName(e.target.value)}
+                    className="w-full p-2.5 bg-surface border border-theme rounded-xl font-bold text-primary focus:outline-none"
+                  >
+                    {selectedChapter?.topics.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Giant Digits */}
+              <div className="py-6">
+                <div className={`text-8xl sm:text-9xl md:text-[10rem] font-light tracking-tight ${timerThemeClasses.text} flex items-center justify-center font-calligraphic italic select-none`}>
+                  <span>{minsFormatted}</span>
+                  <span className="opacity-30 mx-1">:</span>
+                  <span>{secsFormatted}</span>
+                </div>
+                <p className="text-xs font-mono font-bold uppercase tracking-widest text-muted mt-2">
+                  {isActive ? (isPaused ? '⏸ Paused' : '⚡ Deep Focus Active') : 'Ready to Focus'}
+                </p>
+              </div>
+
+              {/* Preset Durations */}
+              <div className="flex items-center justify-center gap-2 flex-wrap">
+                {[15, 25, 45, 60, 90].map(m => (
+                  <button
+                    key={m}
+                    type="button"
+                    disabled={isActive}
+                    onClick={() => {
+                      setTargetMinutes(m);
+                      setSecondsLeft(m * 60);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition cursor-pointer ${
+                      targetMinutes === m
+                        ? 'bg-primary text-white shadow-xs'
+                        : 'bg-surface border border-theme text-muted hover:text-primary'
+                    }`}
+                  >
+                    {m}m
+                  </button>
+                ))}
+              </div>
+
+              {/* Primary Action Buttons */}
+              <div className="flex items-center justify-center gap-3 pt-3 flex-wrap">
+                {!isActive && !isPaused && (
+                  <button
+                    onClick={handleStartTimer}
+                    className="px-10 py-3.5 rounded-full bg-primary hover:opacity-90 text-white font-bold text-sm tracking-wider uppercase transition shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
+                  >
+                    <Play className="w-5 h-5 fill-current" />
+                    <span>Start Timer</span>
+                  </button>
+                )}
+
+                {isActive && !isPaused && (
+                  <button
+                    onClick={handlePauseTimer}
+                    className="px-8 py-3.5 rounded-full bg-amber-600 hover:bg-amber-700 text-white font-bold text-sm tracking-wider uppercase transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
+                  >
+                    <Pause className="w-5 h-5 fill-current" />
+                    <span>Pause</span>
+                  </button>
+                )}
+
+                {isActive && isPaused && (
+                  <button
+                    onClick={handleResumeTimer}
+                    className="px-8 py-3.5 rounded-full bg-primary hover:opacity-90 text-white font-bold text-sm tracking-wider uppercase transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
+                  >
+                    <Play className="w-5 h-5 fill-current" />
+                    <span>Resume</span>
+                  </button>
+                )}
+
+                {(isActive || secondsLeft < targetMinutes * 60) && (
+                  <button
+                    onClick={handleStopTimer}
+                    className="px-8 py-3.5 rounded-full bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm tracking-wider uppercase transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
+                  >
+                    <Square className="w-4 h-4 fill-current" />
+                    <span>Finish & Save</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={handleResetTimer}
+                  className="p-3 rounded-full bg-surface hover:bg-theme-accent text-muted hover:text-primary border border-theme transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+                  title="Reset Timer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ) : isFocusMode ? (
             <div className="space-y-6 text-center py-2 sm:py-4">
               {/* Focus Mode Header Bar */}
               <div className="flex items-center justify-between gap-3 border-b border-theme/40 pb-4">
@@ -1845,6 +2929,126 @@ Return JSON formatted with:
           ) : (
             /* Standard Configurable Timer View */
             <>
+              {/* Study Session Quality Score & Deep Work Dashboard */}
+              <div className="bg-surface border border-theme rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-theme/60 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                      sessionQualityScore >= 85 ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30' :
+                      sessionQualityScore >= 70 ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' :
+                      'bg-stone-500/20 text-stone-700 dark:text-stone-300'
+                    }`}>
+                      <Award className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold uppercase tracking-wider text-primary">
+                          Study Session Quality Score
+                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                          deepWorkRating === 'Deep Work' ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40' :
+                          deepWorkRating === 'Moderate Focus' ? 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-500/40' :
+                          deepWorkRating === 'Fragmented' ? 'bg-amber-500/10 text-amber-800 border border-amber-300' :
+                          'bg-rose-500/10 text-rose-800 border border-rose-300'
+                        }`}>
+                          {deepWorkRating}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted">
+                        Deep work evaluation: focus consistency, content rigor, active retention & tangible output
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Live Score Counter */}
+                  <div className="flex items-baseline gap-1 self-start sm:self-auto bg-theme-accent/60 px-3.5 py-1.5 rounded-xl border border-theme">
+                    <span className="text-xl font-bold font-mono text-primary">{sessionQualityScore}</span>
+                    <span className="text-xs text-muted font-mono">/100</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 pt-1">
+                  {/* 1. Distraction Interruptions */}
+                  <div className="p-3 rounded-xl bg-card border border-theme space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-muted uppercase tracking-wider">Distractions</span>
+                      <span className="text-xs font-mono font-bold text-primary">{distractionCount}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setDistractionCount(prev => prev + 1)}
+                        className="flex-1 px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-800 dark:text-rose-300 text-[11px] font-bold transition cursor-pointer"
+                      >
+                        + Log Distraction
+                      </button>
+                      {distractionCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDistractionCount(prev => Math.max(0, prev - 1))}
+                          className="px-2 py-1.5 rounded-lg bg-theme-accent hover:opacity-80 text-muted text-[11px] font-bold transition cursor-pointer"
+                        >
+                          -
+                        </button>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-muted block">Phone check, multitasking, or interrupted focus</span>
+                  </div>
+
+                  {/* 2. Content Rigor / Difficulty */}
+                  <div className="p-3 rounded-xl bg-card border border-theme space-y-2">
+                    <span className="text-[11px] font-bold text-muted uppercase tracking-wider block">Content Rigor</span>
+                    <select
+                      value={difficultyRating}
+                      onChange={(e) => setDifficultyRating(e.target.value as any)}
+                      className="w-full p-1.5 bg-theme-accent border border-theme rounded-lg text-xs font-semibold text-primary focus:outline-none cursor-pointer"
+                    >
+                      <option value="Introductory">Introductory (70)</option>
+                      <option value="Standard">Standard (85)</option>
+                      <option value="Rigorous">Rigorous (95)</option>
+                      <option value="Past Paper Level">Past Paper Level (100)</option>
+                    </select>
+                    <span className="text-[10px] text-muted block">Difficulty tier multiplier</span>
+                  </div>
+
+                  {/* 3. Active Retention Check */}
+                  <div className="p-3 rounded-xl bg-card border border-theme space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-muted uppercase tracking-wider">Active Retention</span>
+                      <span className="text-xs font-mono font-bold text-primary">{activeRecallScore}%</span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {[100, 85, 70, 50].map(val => (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => setActiveRecallScore(val)}
+                          className={`py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                            activeRecallScore === val ? 'bg-teal-600 text-white' : 'bg-theme-accent text-muted hover:text-primary'
+                          }`}
+                        >
+                          {val}%
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-[10px] text-muted block">Self-tested retrieval strength</span>
+                  </div>
+
+                  {/* 4. Tangible Output Log */}
+                  <div className="p-3 rounded-xl bg-card border border-theme space-y-2">
+                    <span className="text-[11px] font-bold text-muted uppercase tracking-wider block">Tangible Output</span>
+                    <input
+                      type="text"
+                      value={outputSummary}
+                      onChange={(e) => setOutputSummary(e.target.value)}
+                      placeholder="e.g. 5 numericals, 1 page notes"
+                      className="w-full p-1.5 bg-theme-accent border border-theme rounded-lg text-xs text-primary placeholder-muted focus:outline-none"
+                    />
+                    <span className="text-[10px] text-muted block">Solved questions or summary created</span>
+                  </div>
+                </div>
+              </div>
+
               {/* Topic Selector Block */}
               <div className="bg-surface border border-theme rounded-2xl p-4 sm:p-5 space-y-4">
                 <div className="text-xs font-bold text-primary uppercase tracking-widest font-mono flex items-center gap-2">
@@ -1870,7 +3074,23 @@ Return JSON formatted with:
 
                   {/* Chapter Dropdown */}
                   <div>
-                    <label className="block text-[11px] font-bold text-muted uppercase tracking-widest mb-1">Chapter</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-muted uppercase tracking-widest">Chapter</label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedChapterSprintSubject(selectedSubjectName);
+                          setSelectedSingleChapterName(selectedChapterName);
+                          setChapterScope('single');
+                          setActiveMode('chapter_sprint');
+                        }}
+                        className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold hover:underline flex items-center gap-0.5 cursor-pointer"
+                        title="Attempt or revise this full chapter"
+                      >
+                        <Layers className="w-3 h-3" />
+                        <span>Sprint Chapter →</span>
+                      </button>
+                    </div>
                     <select
                       disabled={isActive}
                       value={selectedChapterName}
@@ -2255,7 +3475,1391 @@ Return JSON formatted with:
         </motion.div>
       )}
 
-      {/* VIEW 2: INTEGRATED AI BLURT RECALL & NOTES/DIAGRAM UPLOAD */}
+      {/* VIEW 2: FULL CHAPTER & MULTI-CHAPTER SPRINT */}
+      {activeMode === 'chapter_sprint' && (
+        <motion.div
+          variants={timerEntranceItemVariants}
+          className="bg-card border border-theme rounded-3xl p-5 sm:p-8 shadow-xs space-y-6 sm:space-y-8 relative overflow-hidden transition-colors"
+        >
+          {/* Subtle background glow when active */}
+          {isActive && !isPaused && (
+            <div className="absolute inset-0 bg-primary/5 pointer-events-none animate-pulse"></div>
+          )}
+
+          {/* Chapter Sprint Header Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-theme/50 pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <Layers className="w-4 h-4 text-emerald-500" />
+                </span>
+                <h3 className="text-base sm:text-lg font-serif italic font-bold text-primary">
+                  Full Chapter &amp; Multi-Chapter Sprint Mode
+                </h3>
+              </div>
+              <p className="text-xs text-muted mt-1">
+                Attempt tests or comprehensive revision of a complete chapter or batch multiple chapters at once without topic-by-topic friction.
+              </p>
+            </div>
+
+            {/* Scope Toggle: Single vs Multi */}
+            <div className="flex items-center bg-surface border border-theme rounded-xl p-1 text-xs self-start sm:self-auto">
+              <button
+                type="button"
+                disabled={isActive}
+                onClick={() => setChapterScope('single')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                  chapterScope === 'single'
+                    ? 'bg-primary text-white shadow-2xs'
+                    : 'text-muted hover:text-primary'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Single Chapter</span>
+              </button>
+              <button
+                type="button"
+                disabled={isActive}
+                onClick={() => setChapterScope('multi')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                  chapterScope === 'multi'
+                    ? 'bg-primary text-white shadow-2xs'
+                    : 'text-muted hover:text-primary'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Multiple Chapters</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Config Block: Subject, Chapter(s), and Sprint Goal */}
+          <div className="bg-surface border border-theme rounded-2xl p-4 sm:p-5 space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {/* Subject Dropdown */}
+              <div>
+                <label className="block text-[11px] font-bold text-muted uppercase tracking-widest mb-1">Target Subject</label>
+                <select
+                  disabled={isActive}
+                  value={selectedChapterSprintSubject}
+                  onChange={(e) => {
+                    const subName = e.target.value;
+                    setSelectedChapterSprintSubject(subName);
+                    const sub = subjects.find(s => s.name === subName);
+                    if (sub && sub.chapters.length > 0) {
+                      setSelectedSingleChapterName(sub.chapters[0].name);
+                      setSelectedMultiChapterNames([sub.chapters[0].name]);
+                    }
+                  }}
+                  className="w-full p-2.5 bg-card border border-theme rounded-xl text-xs text-primary focus:outline-none focus:border-primary font-semibold min-h-[42px] cursor-pointer"
+                >
+                  {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                </select>
+              </div>
+
+              {/* Singular Chapter Selector */}
+              {chapterScope === 'single' && (
+                <div>
+                  <label className="block text-[11px] font-bold text-muted uppercase tracking-widest mb-1">Target Chapter</label>
+                  <select
+                    disabled={isActive}
+                    value={selectedSingleChapterName}
+                    onChange={(e) => setSelectedSingleChapterName(e.target.value)}
+                    className="w-full p-2.5 bg-card border border-theme rounded-xl text-xs text-primary focus:outline-none focus:border-primary font-semibold min-h-[42px] cursor-pointer"
+                  >
+                    {selectedSprintSubject?.chapters.map(c => (
+                      <option key={c.id} value={c.name}>
+                        {c.name} ({c.topics.length} topics)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Sprint Goal Selector */}
+              <div className={chapterScope === 'multi' ? 'sm:col-span-2' : ''}>
+                <label className="block text-[11px] font-bold text-muted uppercase tracking-widest mb-1">Sprint Activity &amp; Test Goal</label>
+                <select
+                  disabled={isActive}
+                  value={chapterSprintGoal}
+                  onChange={(e) => setChapterSprintGoal(e.target.value as any)}
+                  className="w-full p-2.5 bg-card border border-theme rounded-xl text-xs text-primary focus:outline-none focus:border-primary font-semibold min-h-[42px] cursor-pointer"
+                >
+                  <option value="test">📝 Full Chapter Mock Test Attempt</option>
+                  <option value="revision">⚡ Comprehensive Chapter Revision</option>
+                  <option value="past_papers">🎯 Past Paper Practice Questions</option>
+                  <option value="deep_study">🧠 Deep Focused Study Block</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Scope Details: Multi-Chapter Checklist */}
+            {chapterScope === 'multi' ? (
+              <div className="space-y-2 pt-2 border-t border-theme/60">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-primary flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-primary" />
+                    <span>Select Chapters to Include in This Sprint:</span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isActive}
+                      onClick={() => {
+                        setSelectedMultiChapterNames(selectedSprintSubject?.chapters.map(c => c.name) || []);
+                      }}
+                      className="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer disabled:opacity-50"
+                    >
+                      Select All ({selectedSprintSubject?.chapters.length})
+                    </button>
+                    <span>•</span>
+                    <button
+                      type="button"
+                      disabled={isActive}
+                      onClick={() => setSelectedMultiChapterNames([])}
+                      className="text-[11px] text-muted hover:text-primary cursor-pointer disabled:opacity-50"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                  {selectedSprintSubject?.chapters.map(ch => {
+                    const isChecked = selectedMultiChapterNames.includes(ch.name);
+                    return (
+                      <label
+                        key={ch.id}
+                        className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition select-none ${
+                          isChecked
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-primary'
+                            : 'bg-card border-theme text-muted hover:bg-theme-accent'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          disabled={isActive}
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedMultiChapterNames(prev => [...prev, ch.name]);
+                            } else {
+                              setSelectedMultiChapterNames(prev => prev.filter(n => n !== ch.name));
+                            }
+                          }}
+                          className="w-4 h-4 accent-primary rounded cursor-pointer"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <span className="text-xs font-bold block truncate">{ch.name}</span>
+                          <span className="text-[10px] text-muted font-mono">{ch.topics.length} topics</span>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {/* Multi Summary Pill */}
+                <div className="p-3 bg-card border border-theme rounded-xl text-xs flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                    <span>
+                      <strong>{selectedMultiChapterNames.length} chapters</strong> selected (
+                      {selectedSprintSubject?.chapters
+                        .filter(c => selectedMultiChapterNames.includes(c.name))
+                        .reduce((acc, c) => acc + c.topics.length, 0)} total topics)
+                    </span>
+                  </div>
+                  <span className="font-mono text-[11px] text-muted">
+                    Session will log progress across all selected chapters
+                  </span>
+                </div>
+              </div>
+            ) : (
+              /* Single Chapter Topic Inventory Preview */
+              <div className="space-y-2 pt-2 border-t border-theme/60">
+                {(() => {
+                  const chObj = selectedSprintSubject?.chapters.find(c => c.name === selectedSingleChapterName);
+                  if (!chObj) return null;
+                  const totalTopics = chObj.topics.length;
+                  const masteredCount = chObj.topics.filter(t => t.status === 'Mastered').length;
+                  const completedCount = chObj.topics.filter(t => t.status === 'Completed').length;
+                  return (
+                    <div>
+                      <div className="flex items-center justify-between text-xs mb-1.5">
+                        <span className="font-bold text-primary">
+                          Chapter Topics ({totalTopics} total):
+                        </span>
+                        <span className="text-[11px] font-mono text-muted">
+                          {masteredCount + completedCount}/{totalTopics} mastered or done
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {chObj.topics.map(t => (
+                          <span
+                            key={t.id}
+                            className={`text-[11px] px-2.5 py-1 rounded-lg border font-semibold ${
+                              t.status === 'Mastered' ? 'bg-emerald-50 text-emerald-800 border-emerald-300' :
+                              t.status === 'Completed' ? 'bg-teal-50 text-teal-800 border-teal-300' :
+                              t.status === 'Weak' || t.status === 'Needs Revision' ? 'bg-rose-50 text-rose-800 border-rose-300' :
+                              'bg-card text-primary border-theme'
+                            }`}
+                          >
+                            {t.status === 'Mastered' ? '⭐ ' : t.status === 'Completed' ? '✓ ' : ''}{t.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+
+          {/* Giant Vintage Calligraphic Clock Face */}
+          <div className="text-center space-y-3 sm:space-y-4 py-2 sm:py-4">
+            <div className={`text-6xl sm:text-8xl md:text-9xl tracking-tight ${timerThemeClasses.text} select-none transition-all flex items-baseline justify-center font-normal ${
+              timerFontStyle === 'cursive' 
+                ? 'font-vintage-cursive italic' 
+                : timerFontStyle === 'serif'
+                ? 'font-serif'
+                : 'font-calligraphic italic'
+            }`}>
+              <span className="font-light">{minsFormatted}</span>
+              <span className="opacity-40 mx-1 sm:mx-1.5 text-[0.65em] font-light select-none">.</span>
+              <span className="font-light text-[0.88em] opacity-90">{secsFormatted}</span>
+            </div>
+
+            <p className={`text-xs font-mono font-bold ${timerThemeClasses.text} tracking-widest uppercase`}>
+              {isActive ? (isPaused ? '⏸ CHAPTER SPRINT PAUSED' : '⚡ CHAPTER SPRINT IN PROGRESS') : 'READY FOR CHAPTER SPRINT'}
+            </p>
+
+            {/* Progress Bar */}
+            <div className="w-full max-w-md mx-auto bg-theme-accent h-2.5 rounded-full overflow-hidden border border-theme shadow-2xs">
+              <div
+                className={`${timerThemeClasses.bar} h-full rounded-full transition-all duration-300`}
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Preset Durations for Chapter Sprints */}
+          <div className="flex items-center justify-center gap-2 flex-wrap">
+            <span className="text-[11px] font-bold text-muted font-mono mr-1">Sprint Length:</span>
+            {[30, 45, 60, 90, 120, 180].map((mins) => (
+              <button
+                key={mins}
+                type="button"
+                disabled={isActive}
+                onClick={() => {
+                  setTargetMinutes(mins);
+                  setSecondsLeft(mins * 60);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition cursor-pointer ${
+                  targetMinutes === mins
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'bg-surface border border-theme text-muted hover:text-primary hover:bg-theme-accent'
+                }`}
+              >
+                {mins >= 60 ? `${mins / 60}h` : `${mins}m`}
+              </button>
+            ))}
+          </div>
+
+          {/* Sound Controls Pill */}
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+            <div className="inline-flex items-center justify-center gap-2 bg-theme-accent/70 border border-theme rounded-full px-4 py-1.5 text-xs text-primary shadow-2xs">
+              <button
+                onClick={() => setIsAmbientSoundOn(!isAmbientSoundOn)}
+                className="flex items-center gap-1.5 font-semibold hover:opacity-80 transition cursor-pointer min-h-[32px]"
+              >
+                {isAmbientSoundOn ? <Volume2 className="w-3.5 h-3.5 text-primary" /> : <VolumeX className="w-3.5 h-3.5 text-muted" />}
+                <span className="text-[11px] font-mono">{isAmbientSoundOn ? 'Sound On' : 'Muted'}</span>
+              </button>
+              {isAmbientSoundOn && (
+                <>
+                  <div className="h-3 w-px bg-theme"></div>
+                  <select
+                    value={ambientSoundType}
+                    onChange={(e) => setAmbientSoundType(e.target.value as any)}
+                    className="bg-transparent text-[11px] font-mono font-bold text-primary focus:outline-none cursor-pointer"
+                  >
+                    <option value="white" className="bg-card text-primary">White Noise</option>
+                    <option value="pink" className="bg-card text-primary">Pink Noise</option>
+                    <option value="rain" className="bg-card text-primary">Soft Rain</option>
+                  </select>
+                </>
+              )}
+            </div>
+
+            <button
+              onClick={playChime}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-theme-accent/80 hover:bg-theme-accent text-primary border border-theme text-xs font-semibold transition cursor-pointer active:scale-95 shadow-2xs min-h-[36px]"
+              title="Play test chime"
+            >
+              <Bell className="w-3.5 h-3.5 text-primary" />
+              <span className="font-mono text-[11px]">Test Sound</span>
+            </button>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            {!isActive && !isPaused && (
+              <button
+                onClick={handleStartTimer}
+                className="px-8 sm:px-12 py-3.5 sm:py-4 rounded-full bg-primary hover:opacity-90 text-white font-bold text-xs sm:text-sm tracking-wider uppercase transition shadow-md flex items-center justify-center gap-2.5 active:scale-95 cursor-pointer min-h-[46px]"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>Start Chapter Sprint</span>
+              </button>
+            )}
+
+            {isActive && !isPaused && (
+              <button
+                onClick={handlePauseTimer}
+                className="px-6 py-3 rounded-full bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs uppercase tracking-wider transition shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 min-h-[44px]"
+              >
+                <Pause className="w-4 h-4 fill-current" />
+                <span>Pause</span>
+              </button>
+            )}
+
+            {isActive && isPaused && (
+              <button
+                onClick={handleResumeTimer}
+                className="px-6 py-3 rounded-full bg-primary hover:opacity-90 text-white font-bold text-xs uppercase tracking-wider transition shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 min-h-[44px]"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>Resume</span>
+              </button>
+            )}
+
+            {(isActive || secondsLeft < targetMinutes * 60) && (
+              <button
+                onClick={handleStopTimer}
+                className="px-6 py-3 rounded-full bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs uppercase tracking-wider transition shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 min-h-[44px]"
+              >
+                <Square className="w-4 h-4 fill-current" />
+                <span>Finish &amp; Record Sprint</span>
+              </button>
+            )}
+
+            <button
+              onClick={handleResetTimer}
+              className="p-3 rounded-full bg-surface hover:opacity-85 text-muted hover:text-primary border border-theme transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center active:scale-95"
+              title="Reset Timer"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Quick Add Time Pills */}
+          <div className="w-full flex items-center justify-center gap-2 pt-1">
+            <span className="text-[11px] font-bold text-muted font-mono mr-1">Extend:</span>
+            <button
+              type="button"
+              onClick={() => handleExtendTimer(5)}
+              className="px-3 py-1 rounded-full bg-surface-raised border border-theme text-xs font-bold text-primary hover:bg-emerald-500/15 hover:text-emerald-700 transition cursor-pointer active:scale-95 shadow-2xs"
+            >
+              +5m
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExtendTimer(10)}
+              className="px-3 py-1 rounded-full bg-surface-raised border border-theme text-xs font-bold text-primary hover:bg-emerald-500/15 hover:text-emerald-700 transition cursor-pointer active:scale-95 shadow-2xs"
+            >
+              +10m
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExtendTimer(15)}
+              className="px-3 py-1 rounded-full bg-surface-raised border border-theme text-xs font-bold text-primary hover:bg-emerald-500/15 hover:text-emerald-700 transition cursor-pointer active:scale-95 shadow-2xs"
+            >
+              +15m
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExtendTimer(25)}
+              className="px-3 py-1 rounded-full bg-surface-raised border border-theme text-xs font-bold text-primary hover:bg-emerald-500/15 hover:text-emerald-700 transition cursor-pointer active:scale-95 shadow-2xs"
+            >
+              +25m
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      {/* VIEW 4: BOARD EXAM PRESSURE PACER & QUESTION SIMULATOR */}
+      {activeMode === 'mcq_pacer' && (
+        <motion.div
+          variants={timerEntranceItemVariants}
+          className="bg-card border border-theme rounded-3xl p-5 sm:p-8 shadow-xs space-y-6 transition-colors relative overflow-hidden"
+        >
+          {/* Subtle pulse glow when active */}
+          {mcqIsActive && !mcqIsPaused && (
+            <div className="absolute inset-0 bg-rose-500/5 pointer-events-none animate-pulse" />
+          )}
+
+          {/* Mode Header with Official SBBM Crest */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-theme/50 pb-4">
+            <div className="flex items-center gap-3">
+              <SBBMCrest size="sm" showLabel={false} />
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base sm:text-lg font-serif italic font-bold text-primary">
+                    Board Exam Pressure Pacer & Question Simulator
+                  </h3>
+                  <span className="text-[9px] font-mono font-black uppercase px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-800 dark:text-rose-300 border border-rose-500/30">
+                    Authentic Board Hall Tension
+                  </span>
+                </div>
+                <p className="text-xs text-muted mt-0.5">
+                  Simulate authentic exam speed across MCQs (21.5s benchmark), Short Questions (2m quick mode), and Long Questions (15m quick mode) with voice recording and printable target stamps.
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Actions: Print Answer Sheet, Chime Toggle, Test Sound */}
+            <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+              <button
+                type="button"
+                onClick={() => setIsAnswerSheetModalOpen(true)}
+                className="px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Print Official SBBM Answer Sheet with Target Stamps"
+              >
+                <Printer className="w-3.5 h-3.5 text-amber-600" />
+                <span>Print SBBM Answer Sheet</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMcqAudioChimeEnabled(!mcqAudioChimeEnabled)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
+                  mcqAudioChimeEnabled
+                    ? 'bg-rose-500/10 text-rose-800 dark:text-rose-300 border-rose-500/30'
+                    : 'bg-theme-surface text-muted border-theme'
+                }`}
+                title="Toggle audio alert chime on time expiration"
+              >
+                <Bell className={`w-3.5 h-3.5 ${mcqAudioChimeEnabled ? 'text-rose-500' : 'text-muted'}`} />
+                <span>{mcqAudioChimeEnabled ? 'Chime Active' : 'Muted'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => playExamChime(3)}
+                className="px-2.5 py-1.5 rounded-xl bg-theme-surface hover:bg-theme-accent border border-theme text-[11px] font-mono font-semibold text-primary transition cursor-pointer"
+                title="Test 3-ring alert bell"
+              >
+                Test Bell
+              </button>
+            </div>
+          </div>
+
+          {/* Exam Pressure Question Category Segment Tabs */}
+          {!mcqIsActive && !mcqIsFinished && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-surface p-1.5 rounded-2xl border border-theme">
+              <button
+                type="button"
+                onClick={() => setExamPressureType('mcq')}
+                className={`py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  examPressureType === 'mcq'
+                    ? 'bg-rose-600 text-white shadow-xs'
+                    : 'text-muted hover:text-primary'
+                }`}
+              >
+                <Target className="w-3.5 h-3.5" />
+                <span>1. MCQ Sprint ({mcqSecondsPerQuestion}s)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setExamPressureType('short_question')}
+                className={`py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  examPressureType === 'short_question'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-muted hover:text-primary'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>2. Short Question ({sqMinutesPerQuestion}m Quick)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setExamPressureType('long_question')}
+                className={`py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  examPressureType === 'long_question'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'text-muted hover:text-primary'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>3. Long Question ({lqMinutesPerQuestion}m Quick)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setExamPressureType('mixed_board')}
+                className={`py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  examPressureType === 'mixed_board'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-muted hover:text-primary'
+                }`}
+              >
+                <Award className="w-3.5 h-3.5" />
+                <span>4. Full Board Exam</span>
+              </button>
+            </div>
+          )}
+
+          {/* STATE 1: PACER SETUP (When not running and not finished) */}
+          {!mcqIsActive && !mcqIsFinished && (
+            <div className="space-y-5">
+              {/* Subject & Chapter Config */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 bg-surface p-4 rounded-2xl border border-theme">
+                <div>
+                  <label className="text-[11px] font-bold text-muted uppercase tracking-wider block mb-1">Subject</label>
+                  <select
+                    value={mcqSelectedSubject}
+                    onChange={(e) => {
+                      const sub = e.target.value;
+                      setMcqSelectedSubject(sub);
+                      const matched = subjects.find(s => s.name === sub);
+                      if (matched && matched.chapters.length > 0) {
+                        setMcqSelectedChapter(matched.chapters[0].name);
+                      }
+                    }}
+                    className="w-full p-2.5 rounded-xl bg-card border border-theme text-xs font-bold text-primary focus:outline-none"
+                  >
+                    {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-muted uppercase tracking-wider block mb-1">Chapter Target</label>
+                  <select
+                    value={mcqSelectedChapter}
+                    onChange={(e) => setMcqSelectedChapter(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-card border border-theme text-xs font-bold text-primary focus:outline-none"
+                  >
+                    {(subjects.find(s => s.name === mcqSelectedSubject) || subjects[0])?.chapters.map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* 1. MCQ MODE CONTROLS */}
+              {examPressureType === 'mcq' && (
+                <>
+                  {/* Number of MCQs Selector */}
+                  <div className="space-y-2 bg-surface p-4 rounded-2xl border border-theme">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-primary flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5 text-primary" />
+                        <span>Total Number of MCQs to Attempt:</span>
+                      </span>
+                      <span className="font-mono font-bold text-primary bg-card px-2.5 py-0.5 rounded-md border border-theme">
+                        {mcqTotalCount} {mcqTotalCount === 1 ? 'Question (Single Blitz)' : 'Questions'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {[1, 5, 10, 20, 25, 30, 40, 50].map(n => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setMcqTotalCount(n)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition cursor-pointer ${
+                            mcqTotalCount === n
+                              ? 'bg-rose-600 text-white shadow-2xs'
+                              : 'bg-card border border-theme text-muted hover:text-primary'
+                          }`}
+                        >
+                          {n === 1 ? '1 MCQ (Blitz)' : `${n} MCQs`}
+                        </button>
+                      ))}
+                      <div className="flex items-center gap-1 ml-auto">
+                        <span className="text-[11px] text-muted">Custom:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={120}
+                          value={mcqTotalCount}
+                          onChange={(e) => setMcqTotalCount(Math.max(1, parseInt(e.target.value) || 1))}
+                          className="w-16 p-1 text-center bg-card border border-theme rounded-lg text-xs font-mono font-bold text-primary"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Time per Question Benchmark */}
+                  <div className="space-y-2 bg-surface p-4 rounded-2xl border border-theme">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-primary flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-primary" />
+                        <span>Time Benchmark Per MCQ:</span>
+                      </span>
+                      <span className="font-mono font-bold text-rose-600 dark:text-rose-400 bg-card px-2.5 py-0.5 rounded-md border border-theme">
+                        {mcqSecondsPerQuestion}s ({Number((mcqSecondsPerQuestion / 60).toFixed(2))}m)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {[
+                        { secs: 21.5, label: '21.5s (Lightning Pressure)' },
+                        { secs: 30, label: '30s (Rapid Drill)' },
+                        { secs: 45, label: '45s (Sprint)' },
+                        { secs: 60, label: '60s (Standard)' },
+                        { secs: 75, label: '75s (Cambridge Benchmark)' },
+                        { secs: 90, label: '90s (Numerical)' }
+                      ].map(p => (
+                        <button
+                          key={p.secs}
+                          type="button"
+                          onClick={() => {
+                            setMcqSecondsPerQuestion(p.secs);
+                            setMcqQuestionSecondsLeft(p.secs);
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            mcqSecondsPerQuestion === p.secs
+                              ? 'bg-rose-600 text-white shadow-2xs'
+                              : 'bg-card border border-theme text-muted hover:text-primary'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                      <div className="flex items-center gap-1.5 ml-auto">
+                        <span className="text-[11px] text-muted">Custom Seconds:</span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="5"
+                          max="300"
+                          value={mcqSecondsPerQuestion}
+                          onChange={(e) => {
+                            const val = Math.max(5, parseFloat(e.target.value) || 21.5);
+                            setMcqSecondsPerQuestion(val);
+                            setMcqQuestionSecondsLeft(val);
+                          }}
+                          className="w-20 p-1 text-center bg-card border border-theme rounded-lg text-xs font-mono font-bold text-primary"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 2. SHORT QUESTION (SQ) MODE CONTROLS */}
+              {examPressureType === 'short_question' && (
+                <>
+                  <div className="space-y-2 bg-surface p-4 rounded-2xl border border-theme">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-primary flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Number of Short Questions (4 Marks Each):</span>
+                      </span>
+                      <span className="font-mono font-bold text-amber-700 dark:text-amber-300 bg-card px-2.5 py-0.5 rounded-md border border-theme">
+                        {sqTotalCount} Questions
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {[1, 3, 5, 6, 8, 10].map(n => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setSqTotalCount(n)}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-bold transition cursor-pointer ${
+                            sqTotalCount === n
+                              ? 'bg-amber-600 text-white shadow-2xs'
+                              : 'bg-card border border-theme text-muted hover:text-primary'
+                          }`}
+                        >
+                          {n} SQ{n === 1 ? '' : 's'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 bg-surface p-4 rounded-2xl border border-theme">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-primary flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Short Question Time Benchmark (Exam Pressure):</span>
+                      </span>
+                      <span className="font-mono font-bold text-amber-700 dark:text-amber-300 bg-card px-2.5 py-0.5 rounded-md border border-theme">
+                        {sqMinutesPerQuestion} Minutes / Question
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {[
+                        { mins: 2, label: '⚡ 2 Minutes (Quick Mode / Speed Drill)' },
+                        { mins: 3, label: '⏱️ 3 Minutes (Standard Board SQ)' },
+                        { mins: 4, label: '📝 4 Minutes (Explanation)' },
+                        { mins: 5, label: '🔬 5 Minutes (Numerical / In-depth)' }
+                      ].map(p => (
+                        <button
+                          key={p.mins}
+                          type="button"
+                          onClick={() => {
+                            setSqMinutesPerQuestion(p.mins);
+                            setSqSecondsLeft(p.mins * 60);
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            sqMinutesPerQuestion === p.mins
+                              ? 'bg-amber-600 text-white shadow-2xs'
+                              : 'bg-card border border-theme text-muted hover:text-primary'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="p-3 bg-amber-500/10 rounded-xl text-[11px] text-amber-900 dark:text-amber-200 mt-2 space-y-1">
+                      <div className="font-bold">Short Question Scoring Breakdown (4 Marks Target):</div>
+                      <div className="opacity-90">• 1 Mark: Statement / Scientific Definition • 1 Mark: Governing Formula / Equation • 2 Marks: Working Points / SI Units</div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 3. LONG QUESTION (LQ) MODE CONTROLS */}
+              {examPressureType === 'long_question' && (
+                <>
+                  <div className="space-y-2 bg-surface p-4 rounded-2xl border border-theme">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-primary flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5 text-purple-500" />
+                        <span>Number of Long Questions (10 Marks Each):</span>
+                      </span>
+                      <span className="font-mono font-bold text-purple-700 dark:text-purple-300 bg-card px-2.5 py-0.5 rounded-md border border-theme">
+                        {lqTotalCount} Questions
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {[1, 2, 3, 4].map(n => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setLqTotalCount(n)}
+                          className={`px-4 py-1.5 rounded-xl text-xs font-mono font-bold transition cursor-pointer ${
+                            lqTotalCount === n
+                              ? 'bg-purple-600 text-white shadow-2xs'
+                              : 'bg-card border border-theme text-muted hover:text-primary'
+                          }`}
+                        >
+                          {n} Long Question{n === 1 ? '' : 's'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 bg-surface p-4 rounded-2xl border border-theme">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-primary flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-purple-500" />
+                        <span>Long Question Time Benchmark (Exam Pressure):</span>
+                      </span>
+                      <span className="font-mono font-bold text-purple-700 dark:text-purple-300 bg-card px-2.5 py-0.5 rounded-md border border-theme">
+                        {lqMinutesPerQuestion} Minutes / Question
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {[
+                        { mins: 10, label: '⚡ 10 Minutes (Rapid Proof Outline)' },
+                        { mins: 15, label: '⏱️ 15 Minutes (Quick Mode / Standard Board Paper)' },
+                        { mins: 20, label: '📝 20 Minutes (Full Extended Derivation)' },
+                        { mins: 25, label: '🔬 25 Minutes (Comprehensive Essay)' }
+                      ].map(p => (
+                        <button
+                          key={p.mins}
+                          type="button"
+                          onClick={() => {
+                            setLqMinutesPerQuestion(p.mins);
+                            setLqSecondsLeft(p.mins * 60);
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            lqMinutesPerQuestion === p.mins
+                              ? 'bg-purple-600 text-white shadow-2xs'
+                              : 'bg-card border border-theme text-muted hover:text-primary'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="p-3 bg-purple-500/10 rounded-xl text-[11px] text-purple-900 dark:text-purple-200 mt-2 space-y-1">
+                      <div className="font-bold">Long Question 4-Phase Milestones (10 Marks Target):</div>
+                      <div className="opacity-90">• 0-3m: Statement & Hypotheses • 3-9m: Mathematical Derivation • 9-12m: Labeled Diagram • 12-15m: Conclusion & Units</div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 4. MIXED BOARD EXAM MODE CONTROLS */}
+              {examPressureType === 'mixed_board' && (
+                <div className="p-4 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl text-xs space-y-3">
+                  <div className="font-bold text-indigo-950 dark:text-indigo-200 text-sm flex items-center gap-2">
+                    <Award className="w-4 h-4 text-indigo-600" />
+                    <span>Complete Sindh Board Examination Hall Structure:</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="p-3 bg-card rounded-xl border border-theme">
+                      <span className="font-bold text-rose-600 block">Section A: MCQs</span>
+                      <span className="text-muted block mt-0.5">15 Questions @ 45s each</span>
+                      <span className="font-mono font-bold text-xs mt-1 block">11.25 Minutes</span>
+                    </div>
+                    <div className="p-3 bg-card rounded-xl border border-theme">
+                      <span className="font-bold text-amber-600 block">Section B: Short Qs</span>
+                      <span className="text-muted block mt-0.5">6 Questions @ 3m each</span>
+                      <span className="font-mono font-bold text-xs mt-1 block">18.0 Minutes</span>
+                    </div>
+                    <div className="p-3 bg-card rounded-xl border border-theme">
+                      <span className="font-bold text-purple-600 block">Section C: Long Qs</span>
+                      <span className="text-muted block mt-0.5">2 Questions @ 15m each</span>
+                      <span className="font-mono font-bold text-xs mt-1 block">30.0 Minutes</span>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted">
+                    Total authentic exam duration: <strong>~59 Minutes</strong>. Warning chimes and milestone bells active throughout.
+                  </p>
+                </div>
+              )}
+
+              {/* Auto-Advance Transition Buffer (1s, 2s, 3s) */}
+              <div className="space-y-2 bg-surface p-4 rounded-2xl border border-theme">
+                <div className="flex items-center justify-between text-xs">
+                  <div>
+                    <span className="font-bold text-primary block">
+                      Transition Buffer Between Questions:
+                    </span>
+                    <span className="text-[11px] text-muted">
+                      Brief pause between questions after warning bell sounds.
+                    </span>
+                  </div>
+                  <span className="font-mono font-bold text-primary bg-card px-2.5 py-0.5 rounded-md border border-theme">
+                    {mcqBufferSeconds} Seconds
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {[1, 2, 3].map(sec => (
+                    <button
+                      key={sec}
+                      type="button"
+                      onClick={() => setMcqBufferSeconds(sec)}
+                      className={`px-4 py-1.5 rounded-xl text-xs font-mono font-bold transition cursor-pointer ${
+                        mcqBufferSeconds === sec
+                          ? 'bg-primary text-white shadow-2xs'
+                          : 'bg-card border border-theme text-muted hover:text-primary'
+                      }`}
+                    >
+                      {sec} Second{sec === 1 ? '' : 's'} Buffer
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Launch Button & Time Budget Breakdown */}
+              <div className="p-4 rounded-2xl bg-primary/5 border border-primary/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-bold text-primary flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-500" />
+                    <span>Total Exam Pressure Budget:</span>
+                  </div>
+                  <div className="text-sm font-bold font-mono text-primary">
+                    {examPressureType === 'mcq'
+                      ? `${Math.floor((mcqTotalCount * mcqSecondsPerQuestion) / 60)}m ${Math.round((mcqTotalCount * mcqSecondsPerQuestion) % 60)}s`
+                      : examPressureType === 'short_question'
+                      ? `${sqTotalCount * sqMinutesPerQuestion} Minutes (${sqTotalCount} Questions @ ${sqMinutesPerQuestion}m)`
+                      : examPressureType === 'long_question'
+                      ? `${lqTotalCount * lqMinutesPerQuestion} Minutes (${lqTotalCount} Questions @ ${lqMinutesPerQuestion}m)`
+                      : '59.25 Minutes (Full Board Simulation)'}
+                  </div>
+                  <div className="text-[11px] text-muted">
+                    {mcqSelectedSubject} • {mcqSelectedChapter}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleStartExamPressureSprint}
+                  className="px-8 py-3.5 rounded-full bg-gradient-to-r from-rose-600 via-amber-600 to-indigo-700 hover:opacity-90 text-white font-bold text-sm tracking-wider uppercase transition shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                >
+                  <Play className="w-4 h-4 fill-current" />
+                  <span>Start {examPressureType === 'mcq' ? 'MCQ' : examPressureType === 'short_question' ? 'Short Q' : examPressureType === 'long_question' ? 'Long Q' : 'Board'} Exam Pressure Sprint</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* STATE 2: ACTIVE QUESTION COUNTDOWN & RUNTIME */}
+          {mcqIsActive && !mcqIsFinished && (
+            <div className="space-y-6 text-center py-2">
+              {/* Question Progress Tracker Header */}
+              <div className="flex items-center justify-between border-b border-theme/60 pb-3 text-xs">
+                <div className="text-left">
+                  <span className="font-bold text-primary text-sm flex items-center gap-1.5">
+                    <Target className="w-4 h-4 text-rose-500" />
+                    <span>
+                      {examPressureType === 'mcq'
+                        ? `MCQ ${mcqCurrentIndex} of ${mcqTotalCount}`
+                        : examPressureType === 'short_question'
+                        ? `Short Question ${sqCurrentIndex} of ${sqTotalCount} (4 Marks)`
+                        : examPressureType === 'long_question'
+                        ? `Long Question ${lqCurrentIndex} of ${lqTotalCount} (10 Marks)`
+                        : `Board Paper Question`}
+                    </span>
+                  </span>
+                  <span className="text-[11px] text-muted font-mono">
+                    {mcqSelectedSubject} — {mcqSelectedChapter}
+                  </span>
+                </div>
+
+                <div className="text-right font-mono">
+                  <div className="text-xs font-bold text-primary">
+                    Total Elapsed: {Math.floor(mcqTotalElapsedSeconds / 60)}m {Math.floor(mcqTotalElapsedSeconds % 60)}s
+                  </div>
+                  <div className="text-[11px] text-muted">
+                    {examPressureType === 'mcq'
+                      ? `Budget: ${Math.floor((mcqTotalCount * mcqSecondsPerQuestion) / 60)}m`
+                      : examPressureType === 'short_question'
+                      ? `Target: ${sqMinutesPerQuestion}m/Q`
+                      : `Target: ${lqMinutesPerQuestion}m/Q`}
+                  </div>
+                </div>
+              </div>
+
+              {/* Transition Buffer Banner */}
+              <AnimatePresence>
+                {mcqIsBufferActive && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-xs font-bold text-amber-800 dark:text-amber-300 flex items-center justify-center gap-2 animate-pulse"
+                  >
+                    <Bell className="w-4 h-4 text-amber-500" />
+                    <span>🔔 TIME'S UP! 3 Rings Bell. Transitioning to next question in {Math.ceil(mcqBufferSecondsLeft)}s...</span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Giant Digits for Current Question Countdown */}
+              <div className="py-2">
+                {/* 1. MCQ Countdown Timer Display */}
+                {examPressureType === 'mcq' && (
+                  <div className={`text-8xl sm:text-9xl md:text-[10rem] font-light tracking-tight flex items-baseline justify-center select-none font-calligraphic italic transition-colors ${
+                    mcqQuestionSecondsLeft <= 5
+                      ? 'text-rose-600 dark:text-rose-400 animate-pulse'
+                      : mcqQuestionSecondsLeft <= 12
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : 'text-primary'
+                  }`}>
+                    {mcqSecondsPerQuestion < 60 ? (
+                      <>
+                        <span>{String(Math.floor(mcqQuestionSecondsLeft)).padStart(2, '0')}</span>
+                        <span className="opacity-40 text-5xl sm:text-6xl md:text-7xl font-mono not-italic">.{Math.floor((mcqQuestionSecondsLeft % 1) * 10)}</span>
+                        <span className="text-2xl sm:text-3xl text-muted font-sans not-italic ml-1">s</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{String(Math.floor(mcqQuestionSecondsLeft / 60)).padStart(2, '0')}</span>
+                        <span className="opacity-30 mx-1">:</span>
+                        <span>{String(Math.floor(mcqQuestionSecondsLeft % 60)).padStart(2, '0')}</span>
+                        <span className="opacity-40 text-4xl sm:text-5xl font-mono not-italic">.{Math.floor((mcqQuestionSecondsLeft % 1) * 10)}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* 2. Short Question (SQ) Countdown Timer Display */}
+                {examPressureType === 'short_question' && (
+                  <div>
+                    <div className={`text-7xl sm:text-8xl md:text-9xl font-light tracking-tight flex items-baseline justify-center select-none font-mono transition-colors ${
+                      sqSecondsLeft <= 30
+                        ? 'text-rose-600 dark:text-rose-400 animate-pulse'
+                        : sqSecondsLeft <= 60
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-primary'
+                    }`}>
+                      <span>{String(Math.floor(sqSecondsLeft / 60)).padStart(2, '0')}</span>
+                      <span className="opacity-30 mx-1">:</span>
+                      <span>{String(Math.floor(sqSecondsLeft % 60)).padStart(2, '0')}</span>
+                    </div>
+                    <div className="flex items-center justify-center gap-2 mt-2">
+                      <span className="text-xs font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30">
+                        🔴 TARGET STAMP: {sqMinutesPerQuestion} MINS PACED (4 MARKS)
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Long Question (LQ) Countdown Timer Display */}
+                {examPressureType === 'long_question' && (
+                  <div>
+                    <div className={`text-7xl sm:text-8xl md:text-9xl font-light tracking-tight flex items-baseline justify-center select-none font-mono transition-colors ${
+                      lqSecondsLeft <= 120
+                        ? 'text-rose-600 dark:text-rose-400 animate-pulse'
+                        : lqSecondsLeft <= 300
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-primary'
+                    }`}>
+                      <span>{String(Math.floor(lqSecondsLeft / 60)).padStart(2, '0')}</span>
+                      <span className="opacity-30 mx-1">:</span>
+                      <span>{String(Math.floor(lqSecondsLeft % 60)).padStart(2, '0')}</span>
+                    </div>
+                    <div className="flex items-center justify-center gap-2 mt-2">
+                      <span className="text-xs font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-800 dark:text-purple-300 border border-purple-500/30">
+                        🔴 TARGET STAMP: {lqMinutesPerQuestion} MINS PACED (10 MARKS)
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Question Progress Bar */}
+                <div className="w-full max-w-md mx-auto bg-surface h-2 rounded-full overflow-hidden border border-theme mt-3">
+                  <div
+                    className="h-full rounded-full transition-all duration-100 bg-primary"
+                    style={{
+                      width: `${
+                        examPressureType === 'mcq'
+                          ? Math.min(100, ((mcqSecondsPerQuestion - mcqQuestionSecondsLeft) / mcqSecondsPerQuestion) * 100)
+                          : examPressureType === 'short_question'
+                          ? Math.min(100, (((sqMinutesPerQuestion * 60) - sqSecondsLeft) / (sqMinutesPerQuestion * 60)) * 100)
+                          : Math.min(100, (((lqMinutesPerQuestion * 60) - lqSecondsLeft) / (lqMinutesPerQuestion * 60)) * 100)
+                      }%`
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* 1. MCQ OPTIONS BUTTONS (A, B, C, D) */}
+              {examPressureType === 'mcq' && (
+                <div className="space-y-3 max-w-xl mx-auto pt-2">
+                  <span className="text-[11px] font-bold text-muted font-mono uppercase tracking-widest block">
+                    Select Answer for Question {mcqCurrentIndex} (Records Choice &amp; Advances):
+                  </span>
+                  <div className="grid grid-cols-4 gap-2.5">
+                    {(['A', 'B', 'C', 'D'] as const).map(option => {
+                      const isSelected = mcqAnswers[mcqCurrentIndex] === option;
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => handleSelectMcqAnswer(option)}
+                          className={`py-3.5 rounded-2xl text-base font-bold transition flex items-center justify-center cursor-pointer shadow-xs active:scale-95 border ${
+                            isSelected
+                              ? 'bg-rose-600 border-rose-600 text-white'
+                              : 'bg-surface hover:bg-theme-accent border-theme text-primary hover:border-primary'
+                          }`}
+                        >
+                          {option}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 2. SHORT QUESTION (SQ) ANSWERING & AUDIO RECORDING PANEL */}
+              {examPressureType === 'short_question' && (
+                <div className="max-w-2xl mx-auto bg-surface p-4 rounded-2xl border border-theme text-left space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-primary flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Structured Short Question Working & Voice Answer:</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => toggleExamAudioRecording(sqCurrentIndex, 'short')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
+                        isExamAudioRecording
+                          ? 'bg-rose-600 text-white border-rose-700 animate-pulse'
+                          : sqAudioRecordings[sqCurrentIndex]?.isRecorded
+                          ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border-emerald-500/30'
+                          : 'bg-card border-theme text-primary hover:bg-theme-accent'
+                      }`}
+                    >
+                      <Mic className="w-3.5 h-3.5" />
+                      <span>
+                        {isExamAudioRecording
+                          ? `Recording... (${recordingSeconds}s)`
+                          : sqAudioRecordings[sqCurrentIndex]?.isRecorded
+                          ? `Voice Recorded ✓ (${sqAudioRecordings[sqCurrentIndex].duration}s)`
+                          : 'Record Voice Answer'}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="text-[11px] text-muted grid grid-cols-3 gap-2">
+                    <div className="p-2 rounded-lg bg-card border border-theme">1. Core Law / Definition</div>
+                    <div className="p-2 rounded-lg bg-card border border-theme">2. Governing Equation</div>
+                    <div className="p-2 rounded-lg bg-card border border-theme">3. 2 Bullet Points / Units</div>
+                  </div>
+
+                  <textarea
+                    value={sqAnswersText[sqCurrentIndex] || ''}
+                    onChange={(e) => setSqAnswersText({ ...sqAnswersText, [sqCurrentIndex]: e.target.value })}
+                    placeholder="Type your structured answer points, formula, or rough workings here (or use Voice Recording)..."
+                    rows={4}
+                    className="w-full p-3 rounded-xl bg-card border border-theme text-xs font-mono text-primary focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {/* 3. LONG QUESTION (LQ) MILESTONES & WORKSPACE */}
+              {examPressureType === 'long_question' && (
+                <div className="max-w-2xl mx-auto bg-surface p-4 rounded-2xl border border-theme text-left space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-primary flex items-center gap-1.5">
+                      <Award className="w-3.5 h-3.5 text-purple-500" />
+                      <span>Long Question Milestones & Detailed Derivation:</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => toggleExamAudioRecording(lqCurrentIndex, 'long')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
+                        isExamAudioRecording
+                          ? 'bg-rose-600 text-white border-rose-700 animate-pulse'
+                          : lqAudioRecordings[lqCurrentIndex]?.isRecorded
+                          ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border-emerald-500/30'
+                          : 'bg-card border-theme text-primary hover:bg-theme-accent'
+                      }`}
+                    >
+                      <Mic className="w-3.5 h-3.5" />
+                      <span>
+                        {isExamAudioRecording
+                          ? `Recording Derivation... (${recordingSeconds}s)`
+                          : lqAudioRecordings[lqCurrentIndex]?.isRecorded
+                          ? `Audio Recorded ✓ (${lqAudioRecordings[lqCurrentIndex].duration}s)`
+                          : 'Record Verbal Derivation'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* 4 Interactive Milestone Checkboxes */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    {[
+                      { key: 'intro' as const, label: 'Stage 1: Statement & Hypothesis (2M)' },
+                      { key: 'derivation' as const, label: 'Stage 2: Mathematical Steps (4M)' },
+                      { key: 'diagram' as const, label: 'Stage 3: Labeled Diagram Sketch (2M)' },
+                      { key: 'units' as const, label: 'Stage 4: Conclusion & SI Units (2M)' }
+                    ].map(st => {
+                      const isChecked = Boolean(lqMilestones[lqCurrentIndex]?.[st.key]);
+                      return (
+                        <button
+                          key={st.key}
+                          type="button"
+                          onClick={() => handleToggleLqMilestone(lqCurrentIndex, st.key)}
+                          className={`p-2 rounded-xl border text-left font-semibold transition cursor-pointer flex items-center gap-2 ${
+                            isChecked
+                              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-300'
+                              : 'bg-card border-theme text-muted hover:text-primary'
+                          }`}
+                        >
+                          <CheckCircle2 className={`w-3.5 h-3.5 ${isChecked ? 'text-emerald-600' : 'text-muted'}`} />
+                          <span className="text-[11px]">{st.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <textarea
+                    value={lqAnswersText[lqCurrentIndex] || ''}
+                    onChange={(e) => setLqAnswersText({ ...lqAnswersText, [lqCurrentIndex]: e.target.value })}
+                    placeholder="Type theorem statement, derivation steps, calculus working, and final conclusion here..."
+                    rows={5}
+                    className="w-full p-3 rounded-xl bg-card border border-theme text-xs font-mono text-primary focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {/* Navigation Action Buttons */}
+              <div className="flex items-center justify-center gap-2.5 pt-3 flex-wrap">
+                {examPressureType === 'mcq' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleFlagMcqQuestion}
+                      className="px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                      title="Flag this question for mistake review"
+                    >
+                      <Target className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Flag for Review 🚩</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSkipMcqQuestion}
+                      className="px-3.5 py-2 rounded-xl bg-surface hover:bg-theme-accent border border-theme text-primary text-xs font-bold transition cursor-pointer"
+                      title="Skip to next question"
+                    >
+                      <span>Skip Question ⏩</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSelectMcqAnswer('DONE')}
+                      className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold transition cursor-pointer shadow-xs flex items-center gap-1.5"
+                    >
+                      <span>Next MCQ ⏭</span>
+                    </button>
+                  </>
+                ) : examPressureType === 'short_question' ? (
+                  <button
+                    type="button"
+                    onClick={handleSelectShortQuestionNext}
+                    className="px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition cursor-pointer shadow-xs flex items-center gap-2"
+                  >
+                    <span>Done / Next Short Question ({sqCurrentIndex} of {sqTotalCount}) ⏭</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSelectLongQuestionNext}
+                    className="px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition cursor-pointer shadow-xs flex items-center gap-2"
+                  >
+                    <span>Done / Next Long Question ({lqCurrentIndex} of {lqTotalCount}) ⏭</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setMcqIsPaused(!mcqIsPaused)}
+                  className="px-3.5 py-2 rounded-xl bg-surface hover:bg-theme-accent border border-theme text-muted hover:text-primary text-xs font-semibold transition cursor-pointer"
+                >
+                  {mcqIsPaused ? 'Resume' : 'Pause'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMcqIsActive(false);
+                    setMcqIsFinished(true);
+                  }}
+                  className="px-3 py-2 rounded-xl text-xs text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
+                >
+                  Finish Early
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* STATE 3: EXAM PRESSURE DEBRIEF & TARGET STAMPS DOSSIER */}
+          {mcqIsFinished && (
+            <div className="space-y-6 text-center py-4">
+              <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 flex items-center justify-center mx-auto shadow-xs">
+                <Award className="w-7 h-7" />
+              </div>
+
+              <div>
+                <h4 className="text-xl font-serif italic font-bold text-primary">
+                  Board Exam Pressure Sprint Complete!
+                </h4>
+                <p className="text-xs text-muted mt-1">
+                  Finished under authentic Sindh Board time benchmarks for {mcqSelectedSubject} — {mcqSelectedChapter}.
+                </p>
+              </div>
+
+              {/* 4 Authentic Target Rubber Stamps Earned */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-w-2xl mx-auto text-left">
+                <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-900 dark:text-rose-200">
+                  <div className="text-[9px] font-mono font-bold">🔴 TARGET STAMP #1</div>
+                  <div className="font-extrabold text-xs mt-0.5">TIME-PACED VERIFIED</div>
+                  <div className="text-[9px] opacity-80 mt-0.5">Speed Certified</div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-900 dark:text-emerald-200">
+                  <div className="text-[9px] font-mono font-bold">🟢 TARGET STAMP #2</div>
+                  <div className="font-extrabold text-xs mt-0.5">100% ATTEMPT</div>
+                  <div className="text-[9px] opacity-80 mt-0.5">Zero Omissions</div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-500/30 text-sky-900 dark:text-sky-200">
+                  <div className="text-[9px] font-mono font-bold">🔵 TARGET STAMP #3</div>
+                  <div className="font-extrabold text-xs mt-0.5">RUBRIC AUDITED</div>
+                  <div className="text-[9px] opacity-80 mt-0.5">Key Steps Covered</div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-900 dark:text-purple-200">
+                  <div className="text-[9px] font-mono font-bold">🟣 TARGET STAMP #4</div>
+                  <div className="font-extrabold text-xs mt-0.5">SBBM GRADE A*</div>
+                  <div className="text-[9px] opacity-80 mt-0.5">Official Standard</div>
+                </div>
+              </div>
+
+              {/* Statistics Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto text-left text-xs">
+                <div className="p-3.5 rounded-2xl bg-surface border border-theme space-y-1">
+                  <span className="text-[10px] font-bold text-muted uppercase block">Total Elapsed</span>
+                  <span className="text-base font-bold font-mono text-primary">
+                    {Math.floor(mcqTotalElapsedSeconds / 60)}m {Math.round(mcqTotalElapsedSeconds % 60)}s
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-surface border border-theme space-y-1">
+                  <span className="text-[10px] font-bold text-muted uppercase block">Questions Attempted</span>
+                  <span className="text-base font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                    {examPressureType === 'mcq' ? mcqTotalCount : examPressureType === 'short_question' ? sqTotalCount : lqTotalCount} Attempted
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-surface border border-theme space-y-1">
+                  <span className="text-[10px] font-bold text-muted uppercase block">Voice Recordings</span>
+                  <span className="text-base font-bold font-mono text-primary">
+                    {(Object.values(sqAudioRecordings) as Array<{ isRecorded: boolean }>).filter(r => r.isRecorded).length + (Object.values(lqAudioRecordings) as Array<{ isRecorded: boolean }>).filter(r => r.isRecorded).length} Voice Notes
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-surface border border-theme space-y-1">
+                  <span className="text-[10px] font-bold text-muted uppercase block">Target Pacing</span>
+                  <span className="text-base font-bold font-mono text-rose-600 dark:text-rose-400">
+                    {examPressureType === 'mcq' ? `${mcqSecondsPerQuestion}s` : examPressureType === 'short_question' ? `${sqMinutesPerQuestion}m` : `${lqMinutesPerQuestion}m`} / Q
+                  </span>
+                </div>
+              </div>
+
+              {/* Action Buttons: Print Answer Sheet, Save to Study Log, Restart */}
+              <div className="flex items-center justify-center gap-3 pt-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setIsAnswerSheetModalOpen(true)}
+                  className="px-6 py-3 rounded-full bg-gradient-to-r from-amber-600 to-rose-600 hover:opacity-90 text-white font-bold text-xs transition cursor-pointer shadow-md flex items-center gap-2"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Print SBBM Answer Sheet with Target Stamps</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveMcqAsMockTest}
+                  className="px-6 py-3 rounded-full bg-primary hover:opacity-90 text-white font-bold text-xs transition cursor-pointer shadow-md flex items-center gap-2"
+                >
+                  <CheckSquare className="w-4 h-4" />
+                  <span>Log into Calendar Study Sessions</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleStartExamPressureSprint}
+                  className="px-5 py-3 rounded-full bg-theme-surface hover:bg-theme-accent border border-theme text-muted hover:text-primary font-semibold text-xs transition cursor-pointer"
+                >
+                  Restart New Sprint 🔄
+                </button>
+              </div>
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* VIEW 3: INTEGRATED AI BLURT RECALL & NOTES/DIAGRAM UPLOAD */}
       {activeMode === 'blurt' && (
         <motion.div
           variants={timerEntranceItemVariants}
@@ -2350,42 +4954,138 @@ Return JSON formatted with:
           {/* TAB 1: WRITTEN BLURT & MULTI-IMAGE UPLOAD */}
           {activeBlurtTab === 'written' ? (
             <>
-              {/* Step 1: AI Prompt Guidance */}
-              <div className="bg-surface border border-theme rounded-2xl p-4 sm:p-5 space-y-3">
+              {/* Step 1: AI Prompt Guidance & Rupex Upload */}
+              <div className="bg-surface border border-theme rounded-2xl p-4 sm:p-5 space-y-3.5">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <span className="text-[11px] font-bold uppercase tracking-widest text-primary font-mono flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                    <span>1. AI Topic Retrieval Guidance</span>
+                    <span>1. AI Topic Retrieval Guidance &amp; Rupex / Rubrics</span>
                   </span>
 
-                  <button
-                    type="button"
-                    onClick={handleGenerateBlurtPrompt}
-                    disabled={isGeneratingPrompt}
-                    className="px-3 py-1.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 min-h-[34px]"
-                  >
-                    {isGeneratingPrompt ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Generating Prompt...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                        <span>{blurtPrompt ? 'Regenerate Retrieval Cue' : 'Generate AI Retrieval Cue'}</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Upload Rupex / Rubric button */}
+                    <input
+                      ref={rubricInputRef}
+                      type="file"
+                      accept="image/*,.pdf,.txt"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files[0]) {
+                          handleUploadRubric(e.target.files[0]);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => rubricInputRef.current?.click()}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer min-h-[34px]"
+                      title="Upload Rupex, Marking Scheme, or Past Paper Rubric for this chapter"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{rubricFile ? 'Replace Rupex' : 'Upload Rupex / Rubric'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleGenerateBlurtPrompt}
+                      disabled={isGeneratingPrompt}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 min-h-[34px]"
+                    >
+                      {isGeneratingPrompt ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Generating Prompt...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                          <span>{blurtPrompt ? 'Regenerate Retrieval Cue' : 'Generate AI Retrieval Cue'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Attached Rupex / Rubric Preview Badge */}
+                {rubricFile && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="font-bold text-emerald-900 dark:text-emerald-200 block truncate">
+                          Rupex / Rubric Attached: {rubricFile.name}
+                        </span>
+                        <span className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80 block font-mono">
+                          {rubricFile.sizeFormatted} • Recall will be evaluated against this marking scheme
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRubricFile(null)}
+                      className="p-1 rounded-lg text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 cursor-pointer"
+                      title="Remove attached rubric"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
+                {/* 1-Click Questions (No Typing Needed) */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-muted">
+                    <span>1-Click Preset Questions (No typing needed):</span>
+                    <span className="text-amber-600 dark:text-amber-400">Click to instantly populate</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPresetQuestion('definitions')}
+                      className="px-2.5 py-1 rounded-lg bg-card hover:bg-theme-accent border border-theme text-[11px] font-bold text-primary transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                    >
+                      <span>📋 Core Definitions</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPresetQuestion('formulas')}
+                      className="px-2.5 py-1 rounded-lg bg-card hover:bg-theme-accent border border-theme text-[11px] font-bold text-primary transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                    >
+                      <span>📐 Formulas &amp; Derivations</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPresetQuestion('traps')}
+                      className="px-2.5 py-1 rounded-lg bg-card hover:bg-theme-accent border border-theme text-[11px] font-bold text-primary transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                    >
+                      <span>⚠️ 3 Examiner Pitfalls</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPresetQuestion('numerical')}
+                      className="px-2.5 py-1 rounded-lg bg-card hover:bg-theme-accent border border-theme text-[11px] font-bold text-primary transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                    >
+                      <span>🔢 High-Yield Problem</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPresetQuestion('questions5')}
+                      className="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                    >
+                      <span>🎯 5 Exam Questions</span>
+                    </button>
+                  </div>
                 </div>
 
                 {blurtPrompt ? (
                   <div className="p-3 bg-card border border-theme rounded-xl text-xs text-primary leading-relaxed">
-                    <strong className="text-amber-600 dark:text-amber-400 font-mono text-[11px] block mb-1">PROMPT:</strong>
+                    <strong className="text-amber-600 dark:text-amber-400 font-mono text-[11px] block mb-1">PROMPT / RETRIEVAL CUE:</strong>
                     {blurtPrompt}
                   </div>
                 ) : (
                   <p className="text-xs text-muted">
-                    Click "Generate AI Retrieval Cue" for targeted exam questions on <em>{selectedTopicName}</em>, or begin typing/dictating your recall below.
+                    Click any 1-click question above or "Generate AI Retrieval Cue" for targeted exam questions on <em>{selectedTopicName}</em>, or begin typing/dictating your recall below.
                   </p>
                 )}
               </div>
@@ -2991,6 +5691,196 @@ Return JSON formatted with:
         </motion.div>
       )}
 
+      {/* VIEW 5: OPTION 4 — RUPEX RUBRIC LOCKER & SAVED SCHEMES */}
+      {activeMode === 'rupex_locker' && (
+        <motion.div
+          variants={timerEntranceItemVariants}
+          className="bg-card border border-theme rounded-3xl p-5 sm:p-8 shadow-xs space-y-6 transition-colors"
+        >
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-theme/50 pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="p-2 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                  <Award className="w-5 h-5 text-indigo-500" />
+                </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base sm:text-lg font-serif italic font-bold text-primary">
+                      Option 4: Rupex Rubric Locker &amp; Saved Marking Schemes
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-500/15 text-indigo-700 dark:text-indigo-300">
+                      Option 4
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted mt-0.5">
+                    Save chapter-wise Rupex marking schemes, past paper answer keys, and grading rubrics. Attach them to active recall blurting or run rapid 2-minute targeted remediation drills.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                ref={rubricInputRef}
+                type="file"
+                accept="image/*,.pdf,.txt"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    handleUploadRubric(e.target.files[0]);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => rubricInputRef.current?.click()}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center gap-2 transition cursor-pointer shadow-xs active:scale-95"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Upload New Rupex</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Active Attached Rubric Banner if one is selected */}
+          {rubricFile && (
+            <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="font-bold text-emerald-900 dark:text-emerald-200">
+                    Currently Attached Rupex: {rubricFile.name}
+                  </div>
+                  <div className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80 font-mono">
+                    {rubricFile.sizeFormatted} &bull; Attached to {selectedSubjectName} &gt; {selectedChapterName}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMode('blurt');
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-bold text-xs transition cursor-pointer"
+                >
+                  Recall with this Rubric →
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRubricFile(null)}
+                  className="p-1.5 rounded-lg text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 cursor-pointer"
+                  title="Detach rubric"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Saved Rupex Schemes Grid */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="font-bold text-primary uppercase tracking-wider">
+                Permanent Rupex Vault ({savedRupexList.length} Schemes Stored):
+              </span>
+              <span className="text-muted">Stored securely on your device</span>
+            </div>
+
+            {savedRupexList.length === 0 ? (
+              <div className="p-8 rounded-2xl bg-surface border border-theme text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 flex items-center justify-center mx-auto">
+                  <Award className="w-6 h-6" />
+                </div>
+                <div className="max-w-md mx-auto">
+                  <h4 className="text-sm font-bold text-primary">No Rupex Rubrics in Locker Yet</h4>
+                  <p className="text-xs text-muted mt-1 leading-relaxed">
+                    Upload official marking schemes, past paper question rubrics, or teacher grading sheets chapter-by-chapter. StudyFlow AI evaluates your recall directly against the board criteria.
+                  </p>
+                </div>
+                <div className="pt-2 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => rubricInputRef.current?.click()}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-xs cursor-pointer hover:opacity-90"
+                  >
+                    Upload First Rupex Scheme
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {savedRupexList.map((rupex) => (
+                  <div
+                    key={rupex.id}
+                    className="p-4 rounded-2xl bg-surface border border-theme flex flex-col justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">
+                          <FileText className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <h5 className="font-bold text-primary truncate max-w-[200px]" title={rupex.name}>
+                            {rupex.name}
+                          </h5>
+                          <div className="text-[11px] text-muted font-mono mt-0.5">
+                            {rupex.subjectName} {rupex.chapterName ? `• ${rupex.chapterName}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono text-muted shrink-0">
+                        {rupex.sizeFormatted}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-theme gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRubricFile(rupex);
+                          setBlurtSuccessMsg(`✓ Rupex "${rupex.name}" attached to active recall!`);
+                          setActiveMode('blurt');
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                      >
+                        <Zap className="w-3 h-3" />
+                        <span>Use for Recall</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSubjectName(rupex.subjectName);
+                          if (rupex.chapterName) setSelectedChapterName(rupex.chapterName);
+                          setIsDrillModalOpen(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 font-bold text-[11px] transition cursor-pointer flex items-center gap-1"
+                      >
+                        <Award className="w-3 h-3" />
+                        <span>2-Min Drill</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteRupexFromLocker(rupex.id)}
+                        className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-500/10 cursor-pointer ml-auto"
+                        title="Remove from locker"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </motion.div>
+      )}
+
       {/* ZEN FULLSCREEN FOCUS OVERLAY */}
       <AnimatePresence>
         {isFullscreenFocus && (
@@ -3077,9 +5967,24 @@ Return JSON formatted with:
               <div className="w-12 h-12 rounded-2xl bg-primary/10 text-primary border border-primary/20 flex items-center justify-center mx-auto mb-2">
                 <CheckCircle2 className="w-6 h-6" />
               </div>
-              <h3 className="text-lg font-serif italic font-bold text-primary">Study Session Finished!</h3>
+              <h3 className="text-lg font-serif italic font-bold text-primary">
+                {activeMode === 'chapter_sprint' ? 'Chapter Sprint Finished!' : 'Study Session Finished!'}
+              </h3>
               <p className="text-xs text-muted">
-                {selectedSubjectName} — <span className="text-primary font-bold">{selectedTopicName}</span>
+                {activeMode === 'chapter_sprint' ? (
+                  <>
+                    <span className="font-semibold">{selectedChapterSprintSubject}</span> —{' '}
+                    <span className="text-primary font-bold">
+                      {chapterScope === 'multi'
+                        ? `${selectedMultiChapterNames.length} Chapters: ${selectedMultiChapterNames.join(', ')}`
+                        : selectedSingleChapterName}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {selectedSubjectName} — <span className="text-primary font-bold">{selectedTopicName}</span>
+                  </>
+                )}
               </p>
             </div>
 
@@ -3418,6 +6323,18 @@ Return JSON formatted with:
         sourceContext="Blurt Recall Autopsy"
         diagnosedRootCause={blurtEvaluation?.whyUnableToExplain || 'Concepts missed during active recall blurt'}
         missingConcepts={blurtEvaluation?.keyConceptsMissed || blurtEvaluation?.knowledgeGaps.map(g => g.concept) || []}
+      />
+
+      {/* Official SBBM Printable Answer Sheet Modal with Target Stamps */}
+      <SbbmAnswerSheetModal
+        isOpen={isAnswerSheetModalOpen}
+        onClose={() => setIsAnswerSheetModalOpen(false)}
+        subjects={subjects}
+        userProfile={userProfile}
+        defaultSubject={mcqSelectedSubject}
+        defaultMcqBenchmark={mcqSecondsPerQuestion}
+        defaultSqBenchmark={sqMinutesPerQuestion}
+        defaultLqBenchmark={lqMinutesPerQuestion}
       />
     </motion.div>
   );

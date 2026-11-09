@@ -2,6 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Suppress benign Vite HMR WebSocket connection failure in proxy/iframe environment
+      window.addEventListener('error', function(event) {
+        if (event && (
+          (event.filename && event.filename.includes('@vite/client')) ||
+          (event.message && (event.message.includes('WebSocket') || event.message.includes('vite-hmr')))
+        )) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return true;
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(event) {
+        var str = String((event && event.reason) || '');
+        if (str.includes('WebSocket') || str.includes('@vite/client') || str.includes('vite-hmr')) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }, true);
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#6B705C" />
     <meta name="mobile-web-app-capable" content="yes" />

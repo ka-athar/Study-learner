@@ -29,7 +29,7 @@ import {
   Printer,
   Mic
 } from 'lucide-react';
-import { FlashcardDeck, Flashcard, Subject } from '../types';
+import { FlashcardDeck, Flashcard, Subject, StudySession } from '../types';
 import { apiGenerateFlashcards } from '../lib/aiApi';
 
 interface FlashcardsViewProps {
@@ -40,6 +40,7 @@ interface FlashcardsViewProps {
   onStartTimerForTopic?: (subjectName: string, chapterName: string, topicName: string) => void;
   onOpenAudioStudy?: (deckId?: string) => void;
   onOpenPrintKit?: () => void;
+  onSaveSession?: (session: Omit<StudySession, 'id'>) => void;
 }
 
 export const FlashcardsView: React.FC<FlashcardsViewProps> = ({
@@ -49,7 +50,8 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({
   onDeleteDeck,
   onStartTimerForTopic,
   onOpenAudioStudy,
-  onOpenPrintKit
+  onOpenPrintKit,
+  onSaveSession
 }) => {
   // Navigation & Mode
   const [selectedDeck, setSelectedDeck] = useState<FlashcardDeck | null>(null);
@@ -220,6 +222,28 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({
       setCurrentCardIndex(prev => prev + 1);
     } else {
       setReviewCompleted(true);
+      if (onSaveSession && selectedDeck) {
+        const todayStr = new Date().toISOString().split('T')[0];
+        const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const estimatedMins = Math.max(5, Math.round(selectedDeck.cards.length * 0.75));
+        onSaveSession({
+          userId: '',
+          date: todayStr,
+          startTime: nowTimeStr,
+          endTime: nowTimeStr,
+          durationMinutes: estimatedMins,
+          subjectName: selectedDeck.subjectName || 'General',
+          chapterName: selectedDeck.chapterName || 'Active Recall Deck',
+          topicName: selectedDeck.topicName || selectedDeck.title,
+          notes: `Active Recall: Completed flashcard deck review of "${selectedDeck.title}" (${selectedDeck.cards.length} cards reviewed).`,
+          timestamp: Date.now()
+        });
+      }
+      try {
+        window.dispatchEvent(new CustomEvent('prepforge:flashcards_reviewed', {
+          detail: { deckId: selectedDeck?.id, timestamp: Date.now() }
+        }));
+      } catch (e) {}
     }
   };
 

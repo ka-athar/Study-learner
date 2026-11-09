@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import { broadcastSyncMessage, savePreSyncSafetyBackup } from './syncChannel';
-import { resolveActiveUserId, setPairedSyncUid } from './db';
+import { resolveActiveUserId, setPairedSyncUid, forceSyncAllToCloud } from './db';
 import { 
   reconcileDatasetsWithHashCheck, 
   saveIndexedDbSnapshot, 
@@ -622,12 +622,71 @@ export async function generateTransferPin(
     ? cleanProvided
     : String(Math.floor(100000 + Math.random() * 900000));
 
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24hr expiration
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7-day expiration with generous clock skew buffer
   const devInfo = detectDeviceInfo();
 
   const sanitizedPayload = sanitizePayloadForTransfer(dataPayload);
 
-  // Run Server Registration & Firestore Write in parallel non-blocking background tasks
+  // Cache locally immediately so instant cross-tab/same-browser connections resolve in 0ms
+  try {
+    localStorage.setItem('prepforge_active_pin_' + code, JSON.stringify({
+      code,
+      uid: uid || 'user_primary',
+      email: email || '',
+      deviceName: devInfo.deviceName,
+      createdAt: new Date().toISOString(),
+      expiresAt,
+      dataPayload: sanitizedPayload
+    }));
+  } catch (e) {}
+
+  // Firestore has a hard limit of 1MB (1,048,576 bytes) per document.
+  let isPayloadSafeForDoc = false;
+  try {
+    const stringified = JSON.stringify(sanitizedPayload || {});
+    isPayloadSafeForDoc = stringified.length < 950000; // Safe threshold < 950KB
+  } catch (e) {
+    isPayloadSafeForDoc = false;
+  }
+
+  // 1. Write to Firestore transferCodes document (primary resilient store across all Cloud Run instances)
+  const firestorePromise = (async () => {
+    try {
+      const transferDocRef = doc(db, 'transferCodes', code);
+      const docData: any = {
+        code,
+        uid: uid || 'user_primary',
+        email: email || '',
+        deviceName: devInfo.deviceName,
+        createdAt: new Date().toISOString(),
+        expiresAt,
+        subjectsCount: Array.isArray(dataPayload?.subjects) ? dataPayload.subjects.length : 0,
+        assignmentsCount: Array.isArray(dataPayload?.assignments) ? dataPayload.assignments.length : 0,
+        vaultsCount: Array.isArray(dataPayload?.vaults) ? dataPayload.vaults.length : 0,
+        sessionsCount: Array.isArray(dataPayload?.sessions) ? dataPayload.sessions.length : 0,
+        plansCount: Array.isArray(dataPayload?.plans) ? dataPayload.plans.length : 0,
+        revisionsCount: Array.isArray(dataPayload?.revisions) ? dataPayload.revisions.length : 0,
+        testResultsCount: Array.isArray(dataPayload?.testResults) ? dataPayload.testResults.length : 0,
+        notesCount: Array.isArray(dataPayload?.notes) ? dataPayload.notes.length : 0,
+        flashcardsCount: Array.isArray(dataPayload?.flashcardDecks) ? dataPayload.flashcardDecks.length : 0
+      };
+
+      if (isPayloadSafeForDoc && sanitizedPayload) {
+        docData.dataPayload = sanitizedPayload;
+      }
+
+      await setDoc(transferDocRef, cleanDoc(docData));
+
+      // Also ensure subcollections in users/{uid} are synchronized so cloud pull works on any instance
+      if (uid && sanitizedPayload) {
+        forceSyncAllToCloud(uid, sanitizedPayload).catch(() => {});
+      }
+    } catch (fErr) {
+      console.warn("Firestore PIN write warning:", fErr);
+    }
+  })();
+
+  // 2. Write to Server in-memory and disk pairing bus
   const serverPromise = fetch('/api/sync/generate-pin', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -653,34 +712,11 @@ export async function generateTransferPin(
     })
   }).catch(() => {});
 
-  const firestorePromise = (async () => {
-    try {
-      const transferDocRef = doc(db, 'transferCodes', code);
-      await setDoc(transferDocRef, cleanDoc({
-        code,
-        uid,
-        email: email || '',
-        deviceName: devInfo.deviceName,
-        createdAt: new Date().toISOString(),
-        expiresAt,
-        dataPayload: sanitizedPayload,
-        subjectsCount: Array.isArray(dataPayload?.subjects) ? dataPayload.subjects.length : 0,
-        assignmentsCount: Array.isArray(dataPayload?.assignments) ? dataPayload.assignments.length : 0,
-        vaultsCount: Array.isArray(dataPayload?.vaults) ? dataPayload.vaults.length : 0,
-        sessionsCount: Array.isArray(dataPayload?.sessions) ? dataPayload.sessions.length : 0,
-        plansCount: Array.isArray(dataPayload?.plans) ? dataPayload.plans.length : 0,
-        revisionsCount: Array.isArray(dataPayload?.revisions) ? dataPayload.revisions.length : 0,
-        testResultsCount: Array.isArray(dataPayload?.testResults) ? dataPayload.testResults.length : 0,
-        notesCount: Array.isArray(dataPayload?.notes) ? dataPayload.notes.length : 0,
-        flashcardsCount: Array.isArray(dataPayload?.flashcardDecks) ? dataPayload.flashcardDecks.length : 0
-      }));
-    } catch (fErr) {
-      console.warn("Firestore PIN write note:", fErr);
-    }
-  })();
-
-  // Trigger background persistence without delaying return to UI
-  Promise.allSettled([serverPromise, firestorePromise]).catch(() => {});
+  // Await server or firestore confirmation with reasonable timeout so PIN is guaranteed stored
+  await Promise.race([
+    Promise.allSettled([firestorePromise, serverPromise]),
+    new Promise(resolve => setTimeout(resolve, 1500))
+  ]);
 
   // Return matching PIN code immediately
   return { code, expiresAt, success: true };
@@ -936,14 +972,16 @@ export async function redeemTransferPin(
 
       if (snap.exists()) {
         const data = snap.data();
-        if (data.expiresAt && new Date(data.expiresAt).getTime() < Date.now()) {
+        const expiryTime = data.expiresAt ? new Date(data.expiresAt).getTime() : 0;
+        // Allow a 7-day grace window
+        if (expiryTime > 0 && expiryTime + 7 * 24 * 3600000 < Date.now()) {
           return { 
             success: false, 
             message: 'This 6-digit Transfer PIN has expired. Please generate a fresh code on your source device.' 
           };
         }
 
-        redeemedUid = data.uid;
+        redeemedUid = data.uid || data.userId || data.user_id;
         redeemedEmail = data.email;
         payload = data.dataPayload;
         sourceDeviceName = data.deviceName || sourceDeviceName;
@@ -958,6 +996,20 @@ export async function redeemTransferPin(
     } catch (err: any) {
       console.warn("Firestore transferCodes query note:", err);
     }
+  }
+
+  // 2.5. Fallback to Local Storage cache if testing across tabs/windows
+  if (!redeemedUid) {
+    try {
+      const cached = localStorage.getItem('prepforge_active_pin_' + cleanCode);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        redeemedUid = parsed.uid;
+        redeemedEmail = parsed.email;
+        payload = parsed.dataPayload;
+        sourceDeviceName = parsed.deviceName || sourceDeviceName;
+      }
+    } catch (e) {}
   }
 
   if (!redeemedUid) {

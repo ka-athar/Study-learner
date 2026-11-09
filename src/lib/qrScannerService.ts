@@ -211,7 +211,7 @@ export function decodeQRFromImageData(
   try {
     const imageData = ctx.getImageData(0, 0, width, height);
     const code = jsQR(imageData.data, imageData.width, imageData.height, {
-      inversionAttempts: 'dontInvert'
+      inversionAttempts: 'attemptBoth'
     });
     if (code && code.data) {
       return {

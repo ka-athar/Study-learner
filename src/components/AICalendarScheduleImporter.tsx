@@ -61,6 +61,7 @@ interface AICalendarScheduleImporterProps {
   subjects: Subject[];
   userProfile: UserProfile | null;
   onSavePlan: (plan: StudyPlan) => void;
+  onBatchSavePlans?: (plans: StudyPlan[]) => Promise<void> | void;
   onUpdateProfile?: (profile: UserProfile) => void;
   onDatesImported?: (dates: string[]) => void;
   initialOpen?: boolean;
@@ -145,6 +146,7 @@ export const AICalendarScheduleImporter: React.FC<AICalendarScheduleImporterProp
   subjects,
   userProfile,
   onSavePlan,
+  onBatchSavePlans,
   onUpdateProfile,
   onDatesImported,
   initialOpen = false
@@ -305,6 +307,7 @@ export const AICalendarScheduleImporter: React.FC<AICalendarScheduleImporterProp
 
       // 2. Save each date as a StudyPlan
       const affectedDates: string[] = Object.keys(dateMap);
+      const plansToBatchSave: StudyPlan[] = [];
 
       affectedDates.forEach(dateStr => {
         const itemsForDate = dateMap[dateStr];
@@ -334,8 +337,16 @@ export const AICalendarScheduleImporter: React.FC<AICalendarScheduleImporterProp
           createdAt: new Date().toISOString()
         };
 
-        onSavePlan(newPlan);
+        plansToBatchSave.push(newPlan);
       });
+
+      if (onBatchSavePlans) {
+        await onBatchSavePlans(plansToBatchSave);
+      } else {
+        for (const p of plansToBatchSave) {
+          await onSavePlan(p);
+        }
+      }
 
       // 3. If exams detected and onUpdateProfile provided, update profile
       if (newExams.length > 0 && onUpdateProfile && userProfile) {

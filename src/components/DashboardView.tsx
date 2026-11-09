@@ -32,7 +32,13 @@ import {
   Layers,
   PenTool,
   BookmarkCheck,
-  Bell
+  Bell,
+  Printer,
+  Camera,
+  HelpCircle,
+  GitMerge,
+  Network,
+  MessageSquare
 } from 'lucide-react';
 import { loadMistakes, calculateMistakeStats, subscribeMistakes } from '../lib/mistakeVaultStorage';
 import { 
@@ -81,6 +87,19 @@ import { SpacedRepetitionCadenceBanner } from './SpacedRepetitionCadenceBanner';
 import { StudyHabitHeatmapCard } from './StudyHabitHeatmapCard';
 import { RetentionForgettingCurveCard } from './RetentionForgettingCurveCard';
 import { DashboardTodayProgressCard } from './DashboardTodayProgressCard';
+import { DailyStudyTargetProgressBarWidget } from './DailyStudyTargetProgressBarWidget';
+import { AcademicAnnouncementBanner } from './AcademicAnnouncementBanner';
+import { ThingsIKeepForgettingCard } from './ThingsIKeepForgettingCard';
+import { PersonalBestsCard } from './PersonalBestsCard';
+import { MilestonesCard } from './MilestonesCard';
+import { EmergencyPreExamTriageModal } from './EmergencyPreExamTriageModal';
+import { FrontFacingStudyDock } from './FrontFacingStudyDock';
+import { getImpendingExams } from '../lib/preExamTriageService';
+import { 
+  evaluatePersonalBests, 
+  evaluateAcademicMilestones, 
+  detectRecurringWeaknesses 
+} from '../lib/academicMasteryEngine';
 import { triggerStudyGoalConfetti } from '../lib/confetti';
 import { sendDailyCompletedWorkEmail } from '../lib/gmailService';
 import { getActiveUserEmail, addActivityLogToDb, resolveActiveUserId } from '../lib/db';
@@ -97,6 +116,8 @@ interface DashboardViewProps {
   missedWork?: MissedWorkItem[];
   userProfile: UserProfile | null;
   setActiveTab: (tab: ActiveTab) => void;
+  onSaveSession?: (session: Omit<StudySession, 'id'>) => Promise<void> | void;
+  onOpenGoogleCalendarSync?: () => void;
   onStartTimerForTopic: (subjectName: string, chapterName: string, topicName: string) => void;
   onStartBlurtForTopic?: (subjectName: string, chapterName: string, topicName: string) => void;
   onStartTimerForAssignment?: (assignment: Assignment) => void;
@@ -106,6 +127,8 @@ interface DashboardViewProps {
   onTogglePlanTopic?: (planId: string, topicId: string, completed?: boolean, details?: any) => void;
   onOpenExamAutomationModal?: () => void;
   onOpenEmailAgendaModal?: () => void;
+  onOpenGoogleChat?: () => void;
+  onOpenGoogleChatSidebar?: () => void;
   onOpenWhatsAppModal?: () => void;
   onOpenVoiceFeynman?: () => void;
   onOpenKnowledgeTree?: () => void;
@@ -114,9 +137,21 @@ interface DashboardViewProps {
   onOpenMaterialImport?: () => void;
   onOpenZenSprint?: (subjectName?: string, topicName?: string) => void;
   onOpenCheatSheet?: (subjectName?: string, topicName?: string) => void;
+  onOpenDailyProgressSync?: () => void;
+  onOpenPrintableDocket?: () => void;
+  onOpenSeniorLocker?: () => void;
+  onOpenQRScanner?: () => void;
+  onOpenExternalAIBridge?: (subjectId?: string, topicName?: string) => void;
+  onOpenNoticeBoard?: () => void;
+  onOpenRevisionBatchTriage?: () => void;
+  onOpenBlurtingDiffCanvas?: (subjectName?: string, topicName?: string) => void;
+  onOpenSocraticViva?: (subjectName?: string, topicName?: string) => void;
+  onOpenCrossTopicSynthesizer?: (topicA?: string, topicB?: string) => void;
+  onOpenWrongMCQAutopsy?: (subjectName?: string, topicName?: string) => void;
   onUpdateTopicStatus?: (subjectName: string, topicName: string, status: TopicStatus) => Promise<void> | void;
   onAddTestResult?: (test: Omit<TestResult, 'id'>) => Promise<void> | void;
   onAdjustPlanTopicDuration?: (planId: string, topicId: string, deltaMinutes: number) => void;
+  onOpenSplitScreen?: () => void;
 }
 
 // Weekly Study Summary Component with Recharts Bar Chart
@@ -473,6 +508,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   missedWork = [],
   userProfile,
   setActiveTab,
+  onSaveSession,
+  onOpenGoogleCalendarSync,
   onStartTimerForTopic,
   onStartBlurtForTopic,
   onStartTimerForAssignment,
@@ -482,6 +519,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onTogglePlanTopic,
   onOpenExamAutomationModal,
   onOpenEmailAgendaModal,
+  onOpenGoogleChat,
+  onOpenGoogleChatSidebar,
   onOpenWhatsAppModal,
   onOpenVoiceFeynman,
   onOpenKnowledgeTree,
@@ -490,16 +529,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenMaterialImport,
   onOpenZenSprint,
   onOpenCheatSheet,
+  onOpenDailyProgressSync,
+  onOpenPrintableDocket,
+  onOpenSeniorLocker,
+  onOpenQRScanner,
+  onOpenExternalAIBridge,
+  onOpenNoticeBoard,
+  onOpenRevisionBatchTriage,
+  onOpenBlurtingDiffCanvas,
+  onOpenSocraticViva,
+  onOpenCrossTopicSynthesizer,
+  onOpenWrongMCQAutopsy,
   onUpdateTopicStatus,
   onAddTestResult,
-  onAdjustPlanTopicDuration
+  onAdjustPlanTopicDuration,
+  onOpenSplitScreen
 }) => {
   // Live clock
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
 
+  // Eye-comfort workstation category tab
+  const [workstationTab, setWorkstationTab] = useState<'essentials' | 'focus' | 'exam' | 'sync' | 'interactive'>('essentials');
+
   // Quick Syllabus Coverage & Mastery Modal state
   const [isQuickCoverageModalOpen, setIsQuickCoverageModalOpen] = useState<boolean>(false);
+
+  // 24-Hour Emergency Pre-Exam Triage & Cram Sheet Modal state
+  const [isEmergencyTriageOpen, setIsEmergencyTriageOpen] = useState<boolean>(false);
+  const [selectedTriageSubject, setSelectedTriageSubject] = useState<string | undefined>(undefined);
+
+  const impendingExams = React.useMemo(() => {
+    return getImpendingExams(userProfile?.examDates || []);
+  }, [userProfile?.examDates]);
 
   // Evening Retro & Two-Way Sync Modal states
   const [isEveningRetroOpen, setIsEveningRetroOpen] = useState<boolean>(false);
@@ -564,6 +626,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     });
     return unsub;
   }, []);
+
+  // Academic Mastery System: Personal Bests, Milestones & Recurring Weaknesses Engine
+  const pbState = React.useMemo(() => {
+    return evaluatePersonalBests(subjects, testResults, sessions);
+  }, [subjects, testResults, sessions]);
+
+  const academicMilestones = React.useMemo(() => {
+    return evaluateAcademicMilestones(subjects, testResults, sessions, loadMistakes(), missedWork);
+  }, [subjects, testResults, sessions, missedWork]);
+
+  const recurringWeaknesses = React.useMemo(() => {
+    return detectRecurringWeaknesses(loadMistakes(), testResults, [], revisions, subjects);
+  }, [testResults, revisions, subjects]);
 
   // Email Completed Work Today state & handler
   const [isSendingCompletedWorkEmail, setIsSendingCompletedWorkEmail] = useState<boolean>(false);
@@ -764,6 +839,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* FRONT-FACING STUDY DOCK: Written Sprint Focus, Sign Hours, Dock Notices, and Google Chat Sidebar */}
+      <FrontFacingStudyDock
+        sessions={sessions}
+        plans={plans}
+        revisions={revisions}
+        userProfile={userProfile}
+        subjects={subjects}
+        onStartTimerForTopic={(subj, chap, top) => {
+          onStartTimerForTopic(subj, chap, top);
+        }}
+        onOpenGoogleChatSidebar={() => {
+          if (onOpenGoogleChatSidebar) {
+            onOpenGoogleChatSidebar();
+          } else if (onOpenGoogleChat) {
+            onOpenGoogleChat();
+          }
+        }}
+        onNavigateTab={setActiveTab}
+        onOpenSplitScreen={onOpenSplitScreen}
+        onUpdateProfile={onUpdateProfile}
+      />
+
       {/* AUTONOMOUS STUDY MATERIAL INGESTION CALLOUT BANNER */}
       {subjects.length === 0 && (
         <div className="bg-gradient-to-r from-[#2D3142] via-[#4F5D75] to-[#2D3142] text-white rounded-3xl p-6 sm:p-8 shadow-md border border-[#4F5D75]/40 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
@@ -890,108 +987,703 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               )}
             </div>
 
-            {/* Quick Action Buttons - Harmonious cohesive aesthetic */}
-            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto py-1">
+            {/* Clean, Eye-Comfort Primary Action Bar */}
+            <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto py-1">
               {/* Focused Timer Primary Action */}
               <button
                 onClick={() => setActiveTab('timer')}
-                className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95 shrink-0"
+                className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-primary-foreground text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95 shrink-0"
                 title="Start a focused study timer session"
               >
-                <Clock className="w-3.5 h-3.5 text-white" />
+                <Clock className="w-3.5 h-3.5 text-primary-foreground" />
                 <span>Focus Sprint</span>
               </button>
 
-              {/* 24/7 Automated Exam Alerts Quick Action */}
-              {onOpenExamAutomationModal && (
+              {/* Cross-Device Today's Progress & Hours Sync */}
+              {onOpenDailyProgressSync && (
                 <button
-                  onClick={onOpenExamAutomationModal}
-                  className="px-3 py-2 rounded-xl bg-theme-accent hover:border-primary/40 border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
-                  title="24/7 Automated Exam Countdown & Syllabus Digest"
-                >
-                  <Bell className="w-3.5 h-3.5 text-primary" />
-                  <span>Exam Alerts</span>
-                  <span className="px-1.5 py-0.5 rounded-full bg-primary/20 text-primary text-[9px] font-mono font-bold">24/7</span>
-                </button>
-              )}
-
-              {/* WhatsApp Coach & Alerts Button */}
-              {onOpenWhatsAppModal && (
-                <button
-                  onClick={onOpenWhatsAppModal}
-                  className="px-3 py-2 rounded-xl bg-theme-accent hover:border-primary/40 border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
-                  title="Open WhatsApp Study Companion: Automated Flight Plans & 2-Way AI Coach"
+                  onClick={onOpenDailyProgressSync}
+                  className="px-3.5 py-2 rounded-xl bg-surface hover:bg-theme-accent border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
+                  title="Sync Today's Study Hours, Streak, and Progress with phone, iPad, or laptop via QR & PIN"
                 >
                   <Smartphone className="w-3.5 h-3.5 text-primary" />
-                  <span>WhatsApp Coach</span>
+                  <span>Sync Hours</span>
                 </button>
               )}
 
-              {/* Voice Socratic Feynman Oral Exam */}
-              {onOpenVoiceFeynman && (
+              {/* Distraction-Free Printable A4 Study Docket */}
+              {onOpenPrintableDocket && (
                 <button
-                  onClick={onOpenVoiceFeynman}
-                  className="px-3 py-2 rounded-xl bg-theme-accent hover:border-primary/40 border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
-                  title="Voice Socratic Oral Exam: Defend your understanding aloud like Richard Feynman"
+                  onClick={onOpenPrintableDocket}
+                  className="px-3.5 py-2 rounded-xl bg-surface hover:bg-theme-accent border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
+                  title="Print Distraction-Free A4 Study Docket to study offline away from phones and tablets"
                 >
-                  <Mic className="w-3.5 h-3.5 text-primary" />
-                  <span>Feynman Exam</span>
+                  <Printer className="w-3.5 h-3.5 text-primary" />
+                  <span>A4 Docket</span>
                 </button>
               )}
 
-              {/* Predictive Grade Simulator */}
-              {onOpenPredictiveGrades && (
+              {/* Academic Notice Board Shortcut */}
+              {onOpenNoticeBoard && (
                 <button
-                  onClick={onOpenPredictiveGrades}
-                  className="px-3 py-2 rounded-xl bg-theme-accent hover:border-primary/40 border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
-                  title="Predictive Grade & Readiness Simulator"
+                  onClick={onOpenNoticeBoard}
+                  className="px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
+                  title="Open Academic Notice Board & Directives"
                 >
-                  <TrendingUp className="w-3.5 h-3.5 text-primary" />
-                  <span>Predictive Grade</span>
+                  <Bell className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  <span>Notices</span>
                 </button>
               )}
 
-              {/* Zen Study Sprint (Option 1) */}
-              {onOpenZenSprint && (
-                <button
-                  onClick={() => onOpenZenSprint()}
-                  className="px-3 py-2 rounded-xl bg-theme-accent hover:border-primary/40 border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
-                  title="Open Zen Study Mode: Ambient soundscapes, breathing pacing, and post-session Feynman blurt"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-primary" />
-                  <span>Zen Sprint</span>
-                </button>
-              )}
-
-              {/* AI Cheat Sheet Generator */}
-              {onOpenCheatSheet && (
-                <button
-                  onClick={() => onOpenCheatSheet()}
-                  className="px-3 py-2 rounded-xl bg-theme-accent hover:border-primary/40 border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 shrink-0"
-                  title="Generate AI High-Yield Cheat Sheet: Core formulas, examiner traps, and mnemonics"
-                >
-                  <FileText className="w-3.5 h-3.5 text-primary" />
-                  <span>AI Cheat Sheet</span>
-                </button>
-              )}
-
-              {/* Email Work */}
+              {/* 24-Hour Emergency Pre-Exam Cram Desk Shortcut */}
               <button
-                onClick={handleEmailCompletedWorkToday}
-                disabled={isSendingCompletedWorkEmail}
-                className="px-3 py-2 rounded-xl bg-theme-accent hover:border-primary/40 border border-theme text-primary text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-50 shrink-0"
-                title="Email today's completed study summary to your Gmail"
+                onClick={() => {
+                  setSelectedTriageSubject(impendingExams[0]?.exam.subjectName);
+                  setIsEmergencyTriageOpen(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95 shrink-0"
+                title="Open 24-Hour Pre-Exam Emergency Triage Desk & Cram Sheet"
               >
-                {isSendingCompletedWorkEmail ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-                ) : (
-                  <Send className="w-3.5 h-3.5 text-primary" />
-                )}
-                <span>Email Work</span>
+                <Zap className="w-3.5 h-3.5 fill-current" />
+                <span>24h Cram Desk</span>
               </button>
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 24-Hour Emergency Pre-Exam Triage Desk Ambient Banner */}
+      {impendingExams.length > 0 && impendingExams[0].hoursRemaining <= 72 && (
+        <div className="p-4 rounded-3xl bg-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs animate-fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Zap className="w-5 h-5 fill-current" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-primary flex items-center gap-2">
+                <span>🚨 Emergency Pre-Exam Triage: {impendingExams[0].exam.subjectName} Exam in {impendingExams[0].hoursRemaining}h</span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-700 dark:text-rose-300 font-bold animate-pulse">
+                  {impendingExams[0].isUrgent ? 'URGENT 24H' : 'APPROACHING'}
+                </span>
+              </div>
+              <p className="text-[11px] text-muted mt-0.5">
+                Suppresses low-yield textbook clutter. Access your customized 1-page A4 Cram Sheet, formula traps, and 10-minute confidence primer.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setSelectedTriageSubject(impendingExams[0].exam.subjectName);
+              setIsEmergencyTriageOpen(true);
+            }}
+            className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer shrink-0 shadow-xs active:scale-95"
+          >
+            <Zap className="w-4 h-4 fill-current" />
+            <span>Open 24h Cram Desk</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* ACADEMIC ANNOUNCEMENT BANNER (Option 9) with Eye-Friendly Aesthetics */}
+      <AcademicAnnouncementBanner
+        onOpenNoticeBoard={onOpenNoticeBoard || (() => {})}
+        onNavigateToTab={setActiveTab}
+      />
+
+      {/* EYE-COMFORT ACADEMIC STUDY TOOLS & WORKSTATION (Anti-Eye-Strain Design) */}
+      <div className="bg-card border border-theme rounded-3xl p-5 sm:p-6 shadow-xs space-y-5 transition-colors">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-theme pb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm sm:text-base font-bold text-primary">Academic Workstation & Tools</h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-surface border border-theme text-muted">
+                Anti-Eye-Strain
+              </span>
+            </div>
+            <p className="text-xs text-muted mt-0.5">
+              Organized into clear categories with restful typography and gentle contrast
+            </p>
+          </div>
+
+          {/* Categorized Tabs for Comfort */}
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-surface border border-theme overflow-x-auto w-full sm:w-auto scrollbar-none">
+            <button
+              type="button"
+              onClick={() => setWorkstationTab('essentials')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+                workstationTab === 'essentials' 
+                  ? 'bg-primary text-primary-foreground shadow-2xs' 
+                  : 'text-muted hover:text-primary'
+              }`}
+            >
+              ⭐ Essentials
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkstationTab('focus')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+                workstationTab === 'focus' 
+                  ? 'bg-primary text-primary-foreground shadow-2xs' 
+                  : 'text-muted hover:text-primary'
+              }`}
+            >
+              🧠 Deep Focus
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkstationTab('exam')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+                workstationTab === 'exam' 
+                  ? 'bg-primary text-primary-foreground shadow-2xs' 
+                  : 'text-muted hover:text-primary'
+              }`}
+            >
+              🏛️ Exam & Syllabus
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkstationTab('sync')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+                workstationTab === 'sync' 
+                  ? 'bg-primary text-primary-foreground shadow-2xs' 
+                  : 'text-muted hover:text-primary'
+              }`}
+            >
+              🔗 Connect & Cloud
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkstationTab('interactive')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                workstationTab === 'interactive' 
+                  ? 'bg-rose-600 text-white shadow-2xs' 
+                  : 'text-muted hover:text-primary hover:bg-rose-500/10'
+              }`}
+            >
+              <span>⚡ Interactive Suite</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-bold">5 Options</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Tab 1: Essentials */}
+        {workstationTab === 'essentials' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5 animate-fade-in">
+            {/* Sync Hours */}
+            {onOpenDailyProgressSync && (
+              <div 
+                onClick={onOpenDailyProgressSync}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary group-hover:scale-105 transition">
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">QR / PIN</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Sync Daily Hours</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Transfer today's completed study hours, streak, and sessions to phone or iPad.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* A4 Study Docket */}
+            {onOpenPrintableDocket && (
+              <div 
+                onClick={onOpenPrintableDocket}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 group-hover:scale-105 transition">
+                    <Printer className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Printable</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">A4 Study Docket</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Distraction-free offline worksheet to study deeply without phone notifications.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* External AI Bridge (Option 3 for Claude & ChatGPT & Gemini Web) */}
+            {onOpenExternalAIBridge && (
+              <div 
+                onClick={() => onOpenExternalAIBridge()}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-105 transition">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400 font-semibold">$0 Free Web</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">External AI Bridge</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Option 3: Deep prompts for Claude, ChatGPT & Gemini Web without in-app bot fees.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Senior Resource Locker */}
+            {onOpenSeniorLocker && (
+              <div 
+                onClick={onOpenSeniorLocker}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400 group-hover:scale-105 transition">
+                    <GraduationCap className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Topper Kit</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Senior Locker</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Browse senior topper notes, annotated cheat sheets & past exam traps.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 2: Deep Focus & Recall */}
+        {workstationTab === 'focus' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5 animate-fade-in">
+            {/* Zen Study Sprint */}
+            {onOpenZenSprint && (
+              <div 
+                onClick={() => onOpenZenSprint()}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 transition">
+                    <Moon className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Binaural</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Zen Sprint</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Ambient soundscapes, box breathing pacing, and post-session Feynman recall.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Voice Socratic Feynman Exam */}
+            {onOpenVoiceFeynman && (
+              <div 
+                onClick={onOpenVoiceFeynman}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-600 dark:text-rose-400 group-hover:scale-105 transition">
+                    <Mic className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Oral Defense</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Voice Feynman Exam</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Defend your concept understanding aloud against an interactive Socratic examiner.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Knowledge Tree */}
+            {onOpenKnowledgeTree && (
+              <div 
+                onClick={onOpenKnowledgeTree}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-600 dark:text-teal-400 group-hover:scale-105 transition">
+                    <Layers className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Graph</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Knowledge Tree</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Explore conceptual prerequisite hierarchy and inter-subject linkages.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Email Study Agenda */}
+            {onOpenEmailAgendaModal && (
+              <div 
+                onClick={onOpenEmailAgendaModal}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400 group-hover:scale-105 transition">
+                    <Mail className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Morning 7AM</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Email Daily Agenda</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Configure automated morning briefing with 1-3-7 revisions and daily study flight plan.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 3: Exam & Syllabus */}
+        {workstationTab === 'exam' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5 animate-fade-in">
+            {/* 24-Hour Emergency Pre-Exam Triage Desk & Cram Sheet */}
+            <div 
+              onClick={() => {
+                setSelectedTriageSubject(undefined);
+                setIsEmergencyTriageOpen(true);
+              }}
+              className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-rose-500/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-600 dark:text-rose-400 group-hover:scale-105 transition">
+                  <Zap className="w-4 h-4 fill-current" />
+                </div>
+                <span className="text-[10px] font-mono font-bold text-rose-700 dark:text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded-full">
+                  24h Cram Desk
+                </span>
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-primary group-hover:text-rose-600 transition">
+                  Pre-Exam Triage & Cram Sheet
+                </h4>
+                <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                  High-stakes triage matrix, formula traps from Mistake Vault, and printable A4 docket.
+                </p>
+              </div>
+            </div>
+
+            {/* Predictive Grade Simulator */}
+            {onOpenPredictiveGrades && (
+              <div 
+                onClick={onOpenPredictiveGrades}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400 group-hover:scale-105 transition">
+                    <TrendingUp className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Simulator</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Predictive Grade</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Forecast final exam marks based on syllabus coverage and mistake cure rate.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* AI Cheat Sheet */}
+            {onOpenCheatSheet && (
+              <div 
+                onClick={() => onOpenCheatSheet()}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400 group-hover:scale-105 transition">
+                    <FileText className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">High-Yield</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">High-Yield Cheat Sheet</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Core formulas, boundary conditions, examiner traps, and memory mnemonics.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Exam Automation Center */}
+            {onOpenExamAutomationModal && (
+              <div 
+                onClick={onOpenExamAutomationModal}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-600 dark:text-rose-400 group-hover:scale-105 transition">
+                    <Bell className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">24/7 Alerts</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Exam Automation</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Automated milestone countdowns, syllabus pacing, and exam alert broadcasts.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* In-App QR Scanner */}
+            {onOpenQRScanner && (
+              <div 
+                onClick={onOpenQRScanner}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary group-hover:scale-105 transition">
+                    <Camera className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Dual Camera</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Scan QR Code</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Scan pairing codes, hours sync payloads, or syllabus kits from screen or photo.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 5: Interactive Study Suite (Options 5, 10, 15, 18, 28) */}
+        {workstationTab === 'interactive' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5 animate-fade-in">
+            {/* Option 5: 1-3-7 Revision Batch Triage */}
+            <div 
+              onClick={() => {
+                if (onOpenRevisionBatchTriage) onOpenRevisionBatchTriage();
+                else setActiveTab('137_revision');
+              }}
+              className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-indigo-500/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-105 transition">
+                  <RotateCcw className="w-4 h-4 animate-spin-slow" />
+                </div>
+                <span className="text-[10px] font-mono text-indigo-600 dark:text-indigo-400 font-bold">Option 5</span>
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">1-3-7 Batch Triage</h4>
+                <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                  Tinder-style swipe & rapid-key triage all Day 1, 3, 7 spaced revision cards due today.
+                </p>
+              </div>
+            </div>
+
+            {/* Option 10: Wrong MCQ Distractor Autopsy */}
+            <div 
+              onClick={() => {
+                if (onOpenWrongMCQAutopsy) onOpenWrongMCQAutopsy();
+                else setActiveTab('mistake_vault');
+              }}
+              className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-rose-500/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-600 dark:text-rose-400 group-hover:scale-105 transition">
+                  <BookmarkCheck className="w-4 h-4" />
+                </div>
+                <span className="text-[10px] font-mono text-rose-600 dark:text-rose-400 font-bold">Option 10</span>
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Wrong MCQ Autopsy</h4>
+                <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                  Paste any missed question & dissect distractor traps, phrasing fallacies & root causes.
+                </p>
+              </div>
+            </div>
+
+            {/* Option 15: 3-Min Blurting & Recall Diff Canvas */}
+            <div 
+              onClick={() => {
+                if (onOpenBlurtingDiffCanvas) onOpenBlurtingDiffCanvas();
+                else setActiveTab('blurt_recall');
+              }}
+              className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-amber-500/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400 group-hover:scale-105 transition">
+                  <Zap className="w-4 h-4" />
+                </div>
+                <span className="text-[10px] font-mono text-amber-600 dark:text-amber-400 font-bold">Option 15</span>
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">3-Min Blurting Diff</h4>
+                <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                  Active recall canvas comparing your brain dump against official rubric mark criteria.
+                </p>
+              </div>
+            </div>
+
+            {/* Option 18: Cross-Topic Mistake Synthesizer */}
+            <div 
+              onClick={() => {
+                if (onOpenCrossTopicSynthesizer) onOpenCrossTopicSynthesizer();
+                else setActiveTab('mistake_vault');
+              }}
+              className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-emerald-500/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 group-hover:scale-105 transition">
+                  <Network className="w-4 h-4" />
+                </div>
+                <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">Option 18</span>
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Cross-Topic Mesh</h4>
+                <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                  Bridge and cross-communicate mutual failure patterns between your top mistake topics.
+                </p>
+              </div>
+            </div>
+
+            {/* Option 28: Interactive Socratic Blind-Spot Viva */}
+            <div 
+              onClick={() => {
+                if (onOpenSocraticViva) onOpenSocraticViva();
+                else setActiveTab('mistake_vault');
+              }}
+              className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-purple-500/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 transition">
+                  <Brain className="w-4 h-4" />
+                </div>
+                <span className="text-[10px] font-mono text-purple-600 dark:text-purple-400 font-bold">Option 28</span>
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Socratic Viva Sandbox</h4>
+                <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                  Step-by-step viva defense: premise articulation, boundary stress-test & resilience score.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+        {workstationTab === 'sync' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5 animate-fade-in">
+            {/* Google Workspace Hub */}
+            {onOpenWorkspaceHub && (
+              <div 
+                onClick={() => onOpenWorkspaceHub()}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400 group-hover:scale-105 transition">
+                    <Layers className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Google Suite</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Workspace Hub</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Classroom streams, Google Drive notes, Docs syllabus export, and Google Tasks sync.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* WhatsApp Study Coach */}
+            {onOpenWhatsAppModal && (
+              <div 
+                onClick={onOpenWhatsAppModal}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 group-hover:scale-105 transition">
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">WhatsApp</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">WhatsApp Coach</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Send daily study flight plans directly to WhatsApp and chat with study companion.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Email Completed Work */}
+            <div 
+              onClick={handleEmailCompletedWorkToday}
+              className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary group-hover:scale-105 transition">
+                  {isSendingCompletedWorkEmail ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                </div>
+                <span className="text-[10px] font-mono text-muted">Gmail</span>
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Email Today's Work</h4>
+                <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                  Dispatch completed study summary and hours directly to your personal Gmail.
+                </p>
+              </div>
+            </div>
+
+            {/* Import Materials */}
+            {onOpenMaterialImport && (
+              <div 
+                onClick={onOpenMaterialImport}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-primary/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-105 transition">
+                    <BookOpen className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted">Syllabus Import</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Import Materials</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Auto-extract syllabus topics and exam objectives from PDFs, images or text.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Google Chat Study Notifications */}
+            {onOpenGoogleChat && (
+              <div 
+                onClick={onOpenGoogleChat}
+                className="p-4 rounded-2xl bg-surface/60 border border-theme hover:border-emerald-500/40 hover:bg-surface transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 group-hover:scale-105 transition">
+                    <MessageSquare className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">Google Chat</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-primary group-hover:text-primary/90">Chat Study Notifications</h4>
+                  <p className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-relaxed">
+                    Structured audit cards: what you have done vs what is pending sent to your Google Chat space.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Top Email Feedback Notification if dispatched from banner */}
@@ -1017,6 +1709,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
       )}
+
+      {/* VISUAL DAILY STUDY TARGET PROGRESS BAR WIDGET WITH QUICK LOG SESSION SHORTCUT */}
+      <DailyStudyTargetProgressBarWidget
+        sessions={sessions}
+        userProfile={userProfile}
+        subjects={subjects}
+        plans={plans}
+        setActiveTab={setActiveTab}
+        onSaveSession={onSaveSession}
+        onOpenGoogleCalendarSync={onOpenGoogleCalendarSync}
+      />
 
       {/* TODAY'S PROGRESS SUMMARY CARD (Linked to Study Habits & Progress view) */}
       <DashboardTodayProgressCard
@@ -1164,6 +1867,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         onNavigateTab={setActiveTab}
       />
 
+      {/* 3. THINGS YOU KEEP FORGETTING (RECURRING WEAKNESSES AUTO-RADAR) */}
+      <ThingsIKeepForgettingCard
+        weaknesses={recurringWeaknesses}
+        onStartRemediation={(weakness) => {
+          if (onOpenWrongMCQAutopsy) {
+            onOpenWrongMCQAutopsy(weakness.subjectName, weakness.conceptName);
+          } else {
+            onStartTimerForTopic(weakness.subjectName, weakness.chapterName || 'General', weakness.conceptName);
+          }
+        }}
+        compact={false}
+      />
+
+      {/* 1 & 2. PERSONAL BESTS & ACADEMIC MILESTONES SUMMARY */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <PersonalBestsCard
+          records={pbState.records}
+          subjectBests={pbState.subjectBests}
+          compact={true}
+        />
+        <MilestonesCard
+          milestones={academicMilestones}
+          compact={true}
+        />
+      </div>
+
       {/* DAILY FRONT: Today's Focus Plan & Real-Time Action Feed */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Today's Focus Plan Card */}
@@ -1250,6 +1979,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 >
                   <Mail className="w-3.5 h-3.5" />
                   <span>Morning Briefing</span>
+                </button>
+              )}
+
+              {onOpenGoogleChat && (
+                <button
+                  onClick={onOpenGoogleChat}
+                  className="px-3.5 py-2 rounded-full bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  title="Google Chat Study Notifications: Audit cards of what you have done vs what is pending"
+                >
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Google Chat Audit</span>
                 </button>
               )}
 
@@ -2404,6 +3144,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         onStartTimerForTopic={onStartTimerForTopic}
         setActiveTab={setActiveTab}
         onAddTestResult={onAddTestResult}
+      />
+
+      {/* 24-Hour Emergency Pre-Exam Triage & Cram Sheet Modal */}
+      <EmergencyPreExamTriageModal
+        isOpen={isEmergencyTriageOpen}
+        onClose={() => setIsEmergencyTriageOpen(false)}
+        subjects={subjects}
+        userProfile={userProfile}
+        mistakes={loadMistakes()}
+        initialSubjectName={selectedTriageSubject}
       />
     </div>
   );

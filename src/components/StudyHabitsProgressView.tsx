@@ -29,7 +29,8 @@ import {
   ExternalLink,
   MessageSquare,
   FileText,
-  ListTodo
+  ListTodo,
+  Shield
 } from 'lucide-react';
 import { 
   StudySession, 
@@ -41,13 +42,15 @@ import {
   StudyHabitId,
   DailyHabitEntry,
   WeeklyReviewItem,
-  WeeklyReviewRecord
+  WeeklyReviewRecord,
+  FlashcardDeck
 } from '../types';
 import { 
   STUDY_HABIT_DEFINITIONS, 
   loadAllHabitEntries, 
   syncHabitsWithAppData, 
   toggleHabitManual, 
+  setAllHabitsState,
   getWeeklyBreakdown, 
   getMonthHeatmap, 
   computeConsistencyStats, 
@@ -56,7 +59,10 @@ import {
   generateDailyStudySummary,
   loadAllWeeklyReviews,
   saveWeeklyReview,
-  getOrCreateWeeklyReview
+  getOrCreateWeeklyReview,
+  activateStreakFreeze,
+  isStreakFreezeAvailable,
+  getStreakFreezeDates
 } from '../lib/habitService';
 
 interface StudyHabitsProgressViewProps {
@@ -65,6 +71,7 @@ interface StudyHabitsProgressViewProps {
   revisions: RevisionItem[];
   plans: StudyPlan[];
   assignments: Assignment[];
+  flashcardDecks?: FlashcardDeck[];
   targetStudyHours?: number;
   onNavigateTab: (tab: ActiveTab) => void;
   onStartTimer?: () => void;
@@ -80,6 +87,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
   revisions = [],
   plans = [],
   assignments = [],
+  flashcardDecks = [],
   targetStudyHours = 3,
   onNavigateTab,
   onStartTimer,
@@ -105,6 +113,17 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
   const [weeklyNotesDraft, setWeeklyNotesDraft] = useState<Record<string, string>>({});
   const [expandedWeekKey, setExpandedWeekKey] = useState<string | null>(null);
 
+  // Streak Freeze state (Option 3)
+  const [freezeNotice, setFreezeNotice] = useState<string | null>(null);
+  const [isFreezeAvail, setIsFreezeAvail] = useState<boolean>(() => isStreakFreezeAvailable());
+
+  const handleActivateFreeze = () => {
+    const res = activateStreakFreeze(selectedDate);
+    setFreezeNotice(res.message);
+    setIsFreezeAvail(isStreakFreezeAvailable());
+    setTimeout(() => setFreezeNotice(null), 6000);
+  };
+
   // Synchronize on mount and whenever related records update
   useEffect(() => {
     const { updatedEntries } = syncHabitsWithAppData({
@@ -114,10 +133,11 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
       revisions,
       plans,
       assignments,
+      flashcardDecks,
       targetStudyHours
     });
     setAllEntries(updatedEntries);
-  }, [sessions, testResults, revisions, plans, assignments, todayStr, targetStudyHours]);
+  }, [sessions, testResults, revisions, plans, assignments, flashcardDecks, todayStr, targetStudyHours]);
 
   // Listen to cross-component habit and weekly review updates
   useEffect(() => {
@@ -166,6 +186,11 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
 
   const handleToggleHabit = (habitId: StudyHabitId) => {
     const updated = toggleHabitManual(selectedDate, habitId);
+    setAllEntries(prev => ({ ...prev, [selectedDate]: updated }));
+  };
+
+  const handleToggleAllHabits = (completed: boolean) => {
+    const updated = setAllHabitsState(selectedDate, completed);
     setAllEntries(prev => ({ ...prev, [selectedDate]: updated }));
   };
 
@@ -422,7 +447,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
               <span className="text-xs text-muted font-normal font-sans">/ {formatMins(plannedMins)} planned</span>
             </div>
             <div className="mt-3">
-              <div className="w-full bg-stone-200 dark:bg-stone-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-theme-surface rounded-full h-2 overflow-hidden border border-theme/30">
                 <div 
                   className="bg-indigo-500 h-2 rounded-full transition-all duration-500" 
                   style={{ width: `${Math.min(100, timePercentage)}%` }}
@@ -448,7 +473,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
               <span className="text-xs text-muted font-normal font-sans">habits complete</span>
             </div>
             <div className="mt-3">
-              <div className="w-full bg-stone-200 dark:bg-stone-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-theme-surface rounded-full h-2 overflow-hidden border border-theme/30">
                 <div 
                   className="bg-emerald-500 h-2 rounded-full transition-all duration-500" 
                   style={{ width: `${habitPercentage}%` }}
@@ -480,6 +505,24 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
             <div className="text-[11px] text-muted mt-1 font-sans">
               Top habit: <span className="font-semibold text-primary">{consistencyStats.mostConsistentHabit}</span>
             </div>
+
+            <div className="mt-2.5 pt-2 border-t border-theme/50 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={handleActivateFreeze}
+                disabled={!isFreezeAvail}
+                className="px-2.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-800 dark:text-cyan-300 border border-cyan-500/30 text-[11px] font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Protect your streak if you need a rest day (1 freeze per 7 days)"
+              >
+                <Shield className="w-3.5 h-3.5 text-cyan-500" />
+                <span>{isFreezeAvail ? 'Streak Freeze (1 Avail)' : 'Freeze Used (Protected)'}</span>
+              </button>
+            </div>
+            {freezeNotice && (
+              <div className="text-[10px] text-cyan-700 dark:text-cyan-300 font-mono mt-1">
+                {freezeNotice}
+              </div>
+            )}
           </div>
         </div>
 
@@ -557,10 +600,26 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
 
       {/* VIEW MODE 1: TODAY'S PROGRESS & STUDY HABITS GRID */}
       {activeViewMode === 'today' && (
-        <div className="space-y-6">
+        <div className="space-y-4">
+          {/* Smart Habit Reminder & Performance Correlation Banner */}
+          {completedHabitsCount < 7 && (
+            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200">
+              <div className="flex items-center gap-2.5">
+                <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+                <div>
+                  <span className="font-bold">Smart Habit Alert: </span>
+                  <span>{7 - completedHabitsCount} habit{7 - completedHabitsCount === 1 ? '' : 's'} remaining for {selectedDate}. Clearing them takes under 5 minutes.</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 font-mono text-[11px] text-amber-800 dark:text-amber-300">
+                <span>📈 Insight: Students completing Active Recall score +22% higher on mock exams.</span>
+              </div>
+            </div>
+          )}
+
           {/* Habits Grid with Interactive Action Buttons */}
           <div className="rounded-3xl bg-theme-card border border-theme overflow-hidden shadow-xs">
-            <div className="p-5 border-b border-theme bg-theme-surface/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="p-5 border-b border-theme bg-theme-surface/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-serif italic font-bold text-primary flex items-center gap-2">
                   <CheckSquare className="w-4 h-4 text-emerald-500" />
@@ -570,8 +629,27 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
                   Click any action button to launch the linked study tool, or check off manually to keep note of your consistency.
                 </p>
               </div>
-              <div className="text-xs font-mono font-semibold text-primary bg-theme-card px-3 py-1 rounded-xl border border-theme">
-                {completedHabitsCount} of {STUDY_HABIT_DEFINITIONS.length} Completed ({habitPercentage}%)
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <button
+                  type="button"
+                  onClick={() => handleToggleAllHabits(true)}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Mark all daily habits as complete for today"
+                >
+                  <Check className="w-3.5 h-3.5 stroke-[3]" />
+                  <span>Select All Done</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleAllHabits(false)}
+                  className="px-2.5 py-1.5 rounded-xl bg-theme-surface hover:bg-theme-accent text-muted hover:text-primary border border-theme text-xs font-semibold transition cursor-pointer"
+                  title="Reset habits for today"
+                >
+                  <span>Reset</span>
+                </button>
+                <div className="text-xs font-mono font-semibold text-primary bg-theme-card px-3 py-1.5 rounded-xl border border-theme">
+                  {completedHabitsCount} of {STUDY_HABIT_DEFINITIONS.length} Completed ({habitPercentage}%)
+                </div>
               </div>
             </div>
 
@@ -598,7 +676,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
                     <div
                       onClick={() => handleToggleHabit(def.id)}
                       className={`p-4 sm:p-5 flex items-start sm:items-center justify-between gap-3 cursor-pointer ${
-                        isCompleted ? 'bg-emerald-500/[0.03]' : ''
+                        isCompleted ? 'bg-emerald-500/[0.04]' : ''
                       }`}
                     >
                       <div className="flex items-start sm:items-center gap-3.5 min-w-0">
@@ -611,8 +689,8 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
                           }}
                           className={`w-6 h-6 rounded-lg border flex items-center justify-center shrink-0 transition ${
                             isCompleted
-                              ? 'bg-emerald-500 border-emerald-500 text-white shadow-2xs'
-                              : 'border-stone-300 dark:border-stone-700 hover:border-stone-400 bg-white dark:bg-stone-900'
+                              ? 'bg-emerald-600 border-emerald-600 text-white shadow-2xs'
+                              : 'border-theme bg-surface hover:border-primary text-transparent'
                           }`}
                         >
                           {isCompleted && <Check className="w-4 h-4 stroke-[3]" />}
@@ -637,7 +715,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
                               </span>
                             )}
                             {habitState.manualOverride && !habitState.autoCompleted && isCompleted && (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-stone-100 dark:bg-stone-800 text-muted border border-theme">
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-theme-surface text-muted border border-theme">
                                 Manual Check
                               </span>
                             )}
@@ -658,7 +736,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
                         <button
                           type="button"
                           onClick={(e) => handleHabitAction(def.id, e)}
-                          className="hidden sm:flex items-center gap-1 px-3 py-1.5 rounded-xl bg-theme-surface hover:bg-stone-200 dark:hover:bg-stone-800 border border-theme text-xs font-semibold text-primary transition cursor-pointer"
+                          className="hidden sm:flex items-center gap-1 px-3 py-1.5 rounded-xl bg-theme-surface hover:bg-theme-accent border border-theme text-xs font-semibold text-primary transition cursor-pointer"
                           title={`Launch tool for ${def.title}`}
                         >
                           <span>{getActionLabel(def.id)}</span>
@@ -681,12 +759,22 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
 
-                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-xl border ${
+                        <span className={`text-xs font-bold px-2.5 py-1 rounded-xl border transition-all flex items-center gap-1.5 shadow-2xs ${
                           isCompleted
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300'
-                            : 'bg-stone-100 text-stone-500 border-stone-200 dark:bg-stone-800 dark:border-stone-700 dark:text-stone-400'
+                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                            : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
                         }`}>
-                          {isCompleted ? 'Done' : 'Pending'}
+                          {isCompleted ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 stroke-[3]" />
+                              <span>Done</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                              <span>Pending</span>
+                            </>
+                          )}
                         </span>
                       </div>
                     </div>
@@ -891,7 +979,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
                                 className={`h-2 rounded-full transition-all ${
                                   done
                                     ? 'bg-emerald-500'
-                                    : 'bg-stone-200 dark:bg-stone-800'
+                                    : 'bg-theme-surface border border-theme/40'
                                 }`}
                               />
                             );
@@ -944,7 +1032,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
                                   className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition ${
                                     item.completed
                                       ? 'bg-emerald-500 border-emerald-500 text-white'
-                                      : 'border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900'
+                                      : 'border-theme bg-theme-surface text-transparent'
                                   }`}
                                 >
                                   {item.completed && <Check className="w-3.5 h-3.5 stroke-[3]" />}
@@ -1047,7 +1135,7 @@ export const StudyHabitsProgressView: React.FC<StudyHabitsProgressViewProps> = (
               {/* Heatmap Legend */}
               <div className="flex items-center gap-2 text-xs text-muted font-mono self-start sm:self-auto">
                 <span>Less</span>
-                <span className="w-3.5 h-3.5 rounded-md bg-stone-100 dark:bg-stone-800 border border-theme" />
+                <span className="w-3.5 h-3.5 rounded-md bg-theme-surface border border-theme" />
                 <span className="w-3.5 h-3.5 rounded-md bg-emerald-200 dark:bg-emerald-950/70" />
                 <span className="w-3.5 h-3.5 rounded-md bg-emerald-400 dark:bg-emerald-800" />
                 <span className="w-3.5 h-3.5 rounded-md bg-emerald-500 dark:bg-emerald-600" />

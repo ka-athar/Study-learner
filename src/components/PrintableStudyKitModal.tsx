@@ -12,7 +12,8 @@ import {
   Columns, 
   BookOpen, 
   Zap,
-  CheckCircle2
+  CheckCircle2,
+  Award
 } from 'lucide-react';
 import { Subject, FlashcardDeck, StudyPlan, UserProfile, RevisionItem } from '../types';
 import { 
@@ -93,11 +94,25 @@ export const PrintableStudyKitModal: React.FC<PrintableStudyKitModalProps> = ({
 
   const formatCards: { id: StudyKitFormat; title: string; desc: string; icon: any; tag: string }[] = [
     {
+      id: 'sbbm_answer_sheet',
+      title: 'Official SBBM Answer Sheet & Target Stamps',
+      desc: 'Authentic exam-hall physical answer folio with target rubber stamps (Time-Paced, 100% Attempt, Examiner Rubric), OMR bubbles, and short & long question grids.',
+      icon: Award,
+      tag: 'Official Board Hall'
+    },
+    {
       id: 'cram_sheet',
       title: 'High-Yield Exam Cram Sheet',
       desc: '1-2 page master syllabus digest with checkboxes, core topics, and flashcard recall items.',
       icon: Zap,
       tag: 'Most Popular'
+    },
+    {
+      id: 'monthly_wall_calendar',
+      title: 'Printable Monthly Academic Wall Calendar',
+      desc: 'Full month poster grid with physical check-off boxes (3h Goal, Active Recall, MCQ Sprint, Done ✓) & target exams.',
+      icon: Calendar,
+      tag: 'Wall Poster'
     },
     {
       id: 'wall_planner',

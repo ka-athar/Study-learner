@@ -6,6 +6,29 @@ export type TopicStatus =
   | 'Weak' 
   | 'Mastered';
 
+export type TopicProgressionState = 
+  | 'Studied' 
+  | 'Practiced' 
+  | 'Tested' 
+  | 'Verified' 
+  | 'Mastered';
+
+export interface TopicMasteryVerification {
+  verifiedAt: string;
+  scorePercentage: number;
+  passed: boolean;
+  totalQuestions: number;
+  correctQuestions: number;
+  preventedMasteryReasons?: string[];
+  recommendedAction?: string;
+  assessedSections?: {
+    recallPassed: boolean;
+    conceptualPassed: boolean;
+    applicationPassed: boolean;
+    examStylePassed: boolean;
+  };
+}
+
 export interface Subtopic {
   id: string;
   name: string;
@@ -30,6 +53,10 @@ export interface Topic {
   testCount?: number;
   timeSpentMinutes?: number;
   sessionsCount?: number;
+  progressionState?: TopicProgressionState;
+  verifiedMasteryScore?: number;
+  verifiedAt?: string;
+  masteryVerification?: TopicMasteryVerification;
 }
 
 export interface Chapter {
@@ -210,9 +237,54 @@ export interface StudySession {
   assignmentId?: string;
   assignmentTitle?: string;
   addedTo137?: boolean; // Track if 1-3-7 revision cycle was triggered
+  qualityScore?: number; // 0-100 Deep Work Quality Score
+  deepWorkRating?: 'Deep Work' | 'Moderate Focus' | 'Fragmented' | 'Shallow';
+  focusPercentage?: number; // 0-100% focus rating
+  distractionCount?: number;
+  difficultyRating?: 'Introductory' | 'Standard' | 'Rigorous' | 'Past Paper Level';
+  activeRecallScore?: number; // 0-100% post-session recall check
+  outputSummary?: string; // e.g. "Solved 8 questions, 1 summary sheet"
 }
 
 export type TopicCompletionStatus = 'Completed' | 'Needs Revision' | 'Partially completed' | 'Mastered';
+
+export interface CalendarSyncStatus {
+  inAppCalendarSynced: boolean;
+  googleCalendarSynced: boolean;
+  googleCalendarSyncError?: string;
+  googleTasksSynced: boolean;
+  googleTasksSyncError?: string;
+  accountabilityActive: boolean;
+  lastSyncedAt?: string;
+}
+
+export interface InAppCalendarEvent {
+  id: string; // Unique internal calendar-event ID
+  planId?: string; // Link to parent StudyPlan
+  planTopicId?: string; // Link to StudyPlanTopic
+  subjectName: string;
+  chapterName?: string;
+  topicName: string;
+  date: string; // YYYY-MM-DD
+  startTime: string; // e.g. "18:00" or "6:00 PM"
+  endTime: string; // e.g. "19:00" or "7:00 PM"
+  durationMinutes: number; // e.g. 60
+  deadline: string; // e.g. "7:00 PM" or "2026-09-30T19:00:00"
+  priority: 'High' | 'Medium' | 'Low';
+  reason?: string;
+  notes?: string;
+  completed?: boolean;
+  completedAt?: string;
+
+  // External sync mappings
+  googleCalendarEventId?: string;
+  googleTaskId?: string;
+
+  // Synchronization status indicators
+  syncStatus: CalendarSyncStatus;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface StudyPlanTopic {
   id: string;
@@ -226,6 +298,17 @@ export interface StudyPlanTopic {
   completionDetails?: string;
   completionStatus?: TopicCompletionStatus;
   completedAt?: string;
+  
+  // Specific scheduling parameters preserved by Calendar Analyzer
+  date?: string; // YYYY-MM-DD
+  startTime?: string; // e.g. "18:00" or "6:00 PM"
+  endTime?: string; // e.g. "19:00" or "7:00 PM"
+  deadline?: string; // e.g. "7:00 PM" or "2026-09-30T19:00:00"
+  calendarEventId?: string; // Inbuilt Calendar Event ID
+  googleCalendarEventId?: string; // External Google Calendar event link
+  googleTaskId?: string; // External Google Task link
+  syncStatus?: CalendarSyncStatus;
+
   targetedQuestions?: Array<{
     id: string;
     questionText: string;
@@ -245,6 +328,8 @@ export interface StudyPlan {
   reasoning: string;
   availableHours?: number;
   createdAt: string;
+  updatedAt?: string;
+  calendarEvents?: InAppCalendarEvent[];
 }
 
 export interface TopicMistakeAnalysis {
@@ -536,6 +621,7 @@ export interface ExamNotificationSettings {
   telegramChatId?: string;          // Free Telegram Chat ID
   telegramBotToken?: string;        // Optional custom bot token, or system default
   discordWebhookUrl?: string;       // Free Discord incoming webhook
+  googleChatWebhookUrl?: string;    // Free Google Chat Space incoming webhook
   customWebhookUrl?: string;        // Free custom incoming webhook
   pushEnabled: boolean;
   pushSoundEnabled?: boolean;
@@ -626,6 +712,7 @@ export interface UserProfile {
   photoURL?: string;
   subjects?: string[];
   targetHoursPerDay: number;
+  studyStreak?: number;
   examDates: ExamDate[];
   createdAt?: string;
   theme?: ThemeConfig;
@@ -643,6 +730,10 @@ export interface UserProfile {
   targetGpaOrScore?: string;
   graduationYear?: string;
   geminiNotebookUrl?: string; // Link to Google NotebookLM / Gemini Notebook
+  googleChatWebhookUrl?: string; // Persistent Google Chat Space Incoming Webhook URL
+  googleChatSpaceLink?: string;  // Direct Google Chat Space link/URL (works for all @gmail.com accounts)
+  googleChatConnectionMethod?: 'google_account' | 'space_link' | 'webhook' | 'discord';
+  googleChatConfig?: any;
   yearProfile?: AcademicYearProfile;
   language?: 'en' | 'ur';
 }
@@ -749,12 +840,14 @@ export interface FlashcardDeck {
 
 export type ActiveTab = 
   | 'dashboard' 
+  | 'study_cockpit'
   | 'study_habits'
   | 'gemini_notebook'
   | 'boss_battle'
   | 'knowledge_graph'
   | 'examiner_red_pen'
   | 'mistake_vault'
+  | 'personal_bests'
   | 'gamification'
   | 'virtual_room'
   | 'blurt_recall'
@@ -1642,9 +1735,239 @@ export type ConflictResolutionMode =
   | 'keep_local'          // Keeps this device's records in any conflict
   | 'overwrite_incoming'; // Replaces local records with incoming device records
 
+// ==========================================
+// 1. PERSONAL BEST SYSTEM TYPES
+// ==========================================
 
+export type PersonalBestMetricId =
+  | 'highest_mock_score'           // Highest mock-exam score
+  | 'highest_mcq_accuracy'          // Highest MCQ accuracy (%)
+  | 'highest_subjective_score'      // Highest subjective-answer score (% or marks)
+  | 'fastest_test_completion'       // Fastest completion of a specific test
+  | 'best_time_per_question'        // Best time-per-question
+  | 'longest_study_session'         // Longest high-quality study session
+  | 'most_productive_day'           // Most productive study day (minutes/hours)
+  | 'most_productive_week'          // Most productive study week
+  | 'most_chapters_week'            // Most chapters completed in one week
+  | 'most_mistakes_corrected'       // Most mistakes corrected
+  | 'best_subject_improvement'      // Best subject improvement
+  | 'highest_topic_mastery'         // Highest topic mastery score
+  | 'longest_study_streak'          // Longest study consistency streak
+  | 'best_full_paper_performance';  // Best full-paper performance
 
+export interface PersonalBestRecord {
+  metricId: PersonalBestMetricId;
+  title: string;
+  category: 'testing' | 'speed' | 'endurance' | 'productivity' | 'mastery';
+  currentValue: number;
+  currentFormatted: string;
+  previousValue?: number;
+  previousFormatted?: string;
+  improvementDelta?: number;
+  improvementFormatted?: string;
+  unit: string;
+  subjectName?: string;
+  topicName?: string;
+  dateAchieved: string; // YYYY-MM-DD
+  context: string;      // Specific context (e.g., "Physics Mock Paper 2", "Chapter 3 Quiz")
+  isNewRecord?: boolean;
+  history?: Array<{
+    date: string;
+    value: number;
+    formatted: string;
+    context: string;
+  }>;
+}
 
+export interface SubjectPersonalBests {
+  subjectName: string;
+  highestScore: number;
+  previousHighestScore?: number;
+  improvementPoints?: number;
+  bestDate: string;
+  bestTestTitle: string;
+  highestAccuracyMcq?: number;
+  fastestPaceMinutesPerMark?: number;
+  masteredTopicsCount: number;
+}
 
+// ==========================================
+// 2. ACADEMIC MILESTONES SYSTEM TYPES
+// ==========================================
 
+export type AcademicMilestoneId =
+  | 'first_100_questions'
+  | 'first_perfect_quiz'
+  | 'first_7day_streak'
+  | 'first_chapter_mastered'
+  | 'first_verified_mastery'
+  | 'first_80_mock'
+  | 'first_90_mock'
+  | '50_mistakes_corrected'
+  | '100_mistakes_corrected'
+  | 'first_complete_past_paper'
+  | 'first_full_syllabus'
+  | 'recovery_after_falling_behind'
+  | 'first_subject_90_mastery'
+  | '250_questions_mastered'
+  | 'first_14day_streak';
 
+export interface AcademicMilestoneRecord {
+  id: AcademicMilestoneId;
+  title: string;
+  description: string;
+  unlocked: boolean;
+  dateAchieved?: string; // YYYY-MM-DD
+  subject?: string;
+  topic?: string;
+  relevantScore?: string | number;
+  academicContext: string;
+  category: 'rigor' | 'mastery' | 'consistency' | 'resilience';
+  progressCurrent: number;
+  progressTarget: number;
+}
+
+// ==========================================
+// 3. THINGS I KEEP FORGETTING (RECURRING WEAKNESSES)
+// ==========================================
+
+export interface RecurringWeaknessItem {
+  id: string;
+  conceptName: string;
+  subjectName: string;
+  topicName?: string;
+  chapterName?: string;
+  mistakeCount: number;         // e.g. 6 (Wrong 6 times)
+  firstOccurrenceDate: string;   // YYYY-MM-DD
+  mostRecentOccurrenceDate: string; // YYYY-MM-DD
+  mostRecentDisplay: string;    // "Today", "2 days ago", "4 days ago"
+  currentMasteryPercentage: number;
+  currentMasteryStatus: TopicStatus;
+  lastSuccessfulRecall?: string; // e.g. "None yet", "2 days ago"
+  relatedChapters: string[];
+  recommendedIntervention: string;
+  cognitiveCategory?: CognitiveErrorCategory;
+  representativeMistakeId?: string;
+  sampleQuestion?: string;
+  sampleTrapDetail?: string;
+  isPersistent: boolean; // Distinguishes repeated mistakes (true) vs one-time slips (false)
+}
+
+// ==========================================
+// 4. CALENDAR & AI PLANNER CONFLICT RESOLUTION
+// ==========================================
+
+export type ScheduleConflictType = 
+  | 'time_overlap'          // Multiple events scheduled simultaneously
+  | 'daily_overcapacity'     // Study plan exceeds student daily hours
+  | 'exam_day_overload'      // Heavy new topics scheduled right on an exam day
+  | 'assignment_clash'       // Homework/assignment deadline clashing with study session
+  | 'overdue_uncompleted'    // Past uncompleted tasks requiring catch-up
+  | 'back_to_back_fatigue';  // Over 90m unbroken study without rest buffer
+
+export type ScheduleConflictSeverity = 'critical' | 'warning' | 'info';
+
+export interface ScheduleConflictAffectedItem {
+  id: string;
+  name: string;
+  subject?: string;
+  time?: string;
+  duration?: number;
+  date?: string;
+  type: 'plan_topic' | 'calendar_event' | 'assignment' | 'exam' | 'revision';
+}
+
+export interface ScheduleConflict {
+  id: string;
+  type: ScheduleConflictType;
+  severity: ScheduleConflictSeverity;
+  date: string;
+  title: string;
+  description: string;
+  affectedItems: ScheduleConflictAffectedItem[];
+  suggestedResolution: string;
+  autoResolvable: boolean;
+}
+
+export interface ScheduleRescheduleProposal {
+  taskId: string;
+  taskName: string;
+  subjectName: string;
+  originalDate: string;
+  originalStartTime?: string;
+  originalEndTime?: string;
+  proposedDate: string;
+  proposedStartTime: string;
+  proposedEndTime: string;
+  durationMinutes: number;
+  reason: string;
+  selected: boolean;
+}
+
+export interface ScheduleDiagnosisSummary {
+  conflicts: ScheduleConflict[];
+  criticalCount: number;
+  warningCount: number;
+  overloadedDays: string[];
+  totalOverloadedMinutes: number;
+  proposals: ScheduleRescheduleProposal[];
+}
+
+// ==========================================
+// 5. 24-HOUR PRE-EXAM TRIAGE & EMERGENCY CRAM SHEET
+// ==========================================
+
+export interface CriticalFormulaEntry {
+  id: string;
+  label: string;
+  formula: string;
+  trapNote: string;
+  unitConstraint?: string;
+  topicName?: string;
+}
+
+export interface MistakeTrapWarning {
+  id: string;
+  concept: string;
+  warning: string;
+  mistakeCount: number;
+  examQuestionSnippet?: string;
+}
+
+export interface HighYieldDefinition {
+  id: string;
+  term: string;
+  definition: string;
+  keyPhrases: string[];
+}
+
+export interface EmergencyConfidenceQuestion {
+  id: string;
+  question: string;
+  answer: string;
+  keyTrap: string;
+  subjectName: string;
+  topicName: string;
+}
+
+export interface EmergencyCramSheet {
+  id: string;
+  examId?: string;
+  subjectName: string;
+  examTitle: string;
+  examDate: string;
+  hoursRemaining: number;
+  triageClassification: {
+    protectTopics: string[];    // High confidence: Don't over-study, protect marks
+    cramTopics: string[];       // Volatile / Mistake-prone: Highest ROI to review now
+    shelveTopics: string[];     // Lost causes or very low yield: Drop to prevent panic
+  };
+  criticalFormulas: CriticalFormulaEntry[];
+  mistakeTrapsToAvoid: MistakeTrapWarning[];
+  highYieldDefinitions: HighYieldDefinition[];
+  examinerKeywordAlerts: string[];
+  confidencePrimerQuestions: EmergencyConfidenceQuestion[];
+  confidenceScore: number;
+  createdAt: string;
+  customNotes?: string;
+}

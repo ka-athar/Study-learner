@@ -25,7 +25,7 @@ import {
 
 export interface ParsedQRResult {
   raw: string;
-  type: 'transfer_pin' | 'study_url' | 'vault_bundle' | 'email_link' | 'generic_url' | 'text';
+  type: 'transfer_pin' | 'study_url' | 'vault_bundle' | 'daily_progress' | 'email_link' | 'generic_url' | 'text';
   transferPin?: string;
   syncEmail?: string;
   syncUid?: string;
@@ -53,16 +53,65 @@ export const parseQRData = (rawText: string): ParsedQRResult => {
     };
   }
 
-  // 2. Check if JSON payload (e.g. Vault Bundle or Syllabus Data)
+  // 1b. Check if URL contains daily_sync or daily_data
+  if (trimmed.includes('action=daily_sync') || trimmed.includes('daily_data=') || trimmed.includes('today_hours=')) {
+    try {
+      let payloadData: any = null;
+      if (trimmed.includes('daily_data=')) {
+        const rawEncoded = trimmed.split('daily_data=')[1].split('&')[0];
+        payloadData = JSON.parse(decodeURIComponent(escape(atob(rawEncoded))));
+      } else {
+        const url = new URL(trimmed.startsWith('http') ? trimmed : `https://studyos.local/${trimmed}`);
+        const hours = Number(url.searchParams.get('today_hours') || url.searchParams.get('hours') || 0);
+        const mins = Number(url.searchParams.get('today_minutes') || url.searchParams.get('mins') || (hours * 60));
+        const streak = Number(url.searchParams.get('streak') || 1);
+        const pin = url.searchParams.get('pin') || url.searchParams.get('transfer_code');
+        payloadData = {
+          type: 'DAILY_PROGRESS_TRANSFER',
+          todayHours: hours,
+          todayMinutes: mins,
+          studyStreak: streak,
+          pin
+        };
+      }
+
+      if (payloadData) {
+        return {
+          raw: trimmed,
+          type: 'daily_progress',
+          data: payloadData,
+          displayText: `Today's Progress: ${payloadData.todayHours || (payloadData.todayMinutes / 60).toFixed(1)} hrs delivered (${payloadData.todayMinutes || 0}m)`
+        };
+      }
+    } catch (dErr) {}
+  }
+
+  // 2. Check if JSON payload (e.g. Daily Progress, Vault Bundle or Syllabus Data)
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
       const parsed = JSON.parse(trimmed);
+      if (parsed.type === 'DAILY_PROGRESS_TRANSFER' || parsed.type === 'STUDY_PROGRESS_SYNC' || parsed.todayProgress || parsed.studySync) {
+        return {
+          raw: trimmed,
+          type: 'daily_progress',
+          data: parsed,
+          displayText: `Today's Progress: ${parsed.todayMinutes || parsed.totalMinutes || 0}m logged (${parsed.sessions?.length || 0} sessions)`
+        };
+      }
       if (parsed.studyVault || parsed.vault || parsed.type === 'STUDY_VAULT_BUNDLE') {
         return {
           raw: trimmed,
           type: 'vault_bundle',
           data: parsed,
           displayText: `Study Vault Bundle: "${parsed.vault?.name || parsed.studyVault?.name || 'Academic Vault'}"`
+        };
+      }
+      if (parsed.pin && /^\d{6}$/.test(String(parsed.pin))) {
+        return {
+          raw: trimmed,
+          type: 'transfer_pin',
+          transferPin: String(parsed.pin),
+          displayText: `Transfer PIN: ${parsed.pin}`
         };
       }
       return {
@@ -256,14 +305,44 @@ export const InAppQRScanner: React.FC<InAppQRScannerProps> = ({
     if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (ctx) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        // Optimal resolution capping to 800px max for instant 60fps mobile decoding
+        const maxDim = 800;
+        let w = video.videoWidth || 640;
+        let h = video.videoHeight || 480;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
 
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: 'dontInvert'
+        canvas.width = w;
+        canvas.height = h;
+        ctx.drawImage(video, 0, 0, w, h);
+
+        const imageData = ctx.getImageData(0, 0, w, h);
+        let code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth'
         });
+
+        // Secondary pass with contrast enhancement if first attempt was inconclusive (handles screen glare & dim lights)
+        if (!code) {
+          const d = imageData.data;
+          // Apply fast binarization/contrast boost on temporary buffer
+          const enhancedData = new Uint8ClampedArray(d.length);
+          for (let i = 0; i < d.length; i += 4) {
+            const gray = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
+            const val = gray > 128 ? Math.min(255, gray * 1.3) : Math.max(0, gray * 0.7);
+            enhancedData[i] = val;
+            enhancedData[i + 1] = val;
+            enhancedData[i + 2] = val;
+            enhancedData[i + 3] = d[i + 3];
+          }
+          code = jsQR(enhancedData, w, h, { inversionAttempts: 'attemptBoth' });
+        }
 
         if (code && code.data) {
           const parsed = parseQRData(code.data);
@@ -335,7 +414,25 @@ export const InAppQRScanner: React.FC<InAppQRScannerProps> = ({
         if (ctx) {
           ctx.drawImage(img, 0, 0);
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(imageData.data, imageData.width, imageData.height);
+          let code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'attemptBoth'
+          });
+
+          // Secondary contrast attempt on uploaded image
+          if (!code) {
+            const d = imageData.data;
+            const enhancedData = new Uint8ClampedArray(d.length);
+            for (let i = 0; i < d.length; i += 4) {
+              const gray = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
+              const val = gray > 128 ? Math.min(255, gray * 1.35) : Math.max(0, gray * 0.65);
+              enhancedData[i] = val;
+              enhancedData[i + 1] = val;
+              enhancedData[i + 2] = val;
+              enhancedData[i + 3] = d[i + 3];
+            }
+            code = jsQR(enhancedData, canvas.width, canvas.height, { inversionAttempts: 'attemptBoth' });
+          }
+
           if (code && code.data) {
             const parsed = parseQRData(code.data);
             playBeepSound();

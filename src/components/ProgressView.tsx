@@ -22,6 +22,10 @@ import {
   Calendar
 } from 'lucide-react';
 import { Subject, TopicStatus, UserProfile, TestResult, FlashcardDeck, StudySession, RevisionItem } from '../types';
+import { PersonalBestsCard } from './PersonalBestsCard';
+import { MilestonesCard } from './MilestonesCard';
+import { evaluatePersonalBests, evaluateAcademicMilestones } from '../lib/academicMasteryEngine';
+import { loadMistakes } from '../lib/mistakeVaultStorage';
 
 interface ProgressViewProps {
   subjects: Subject[];
@@ -48,6 +52,15 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
   const [extraStudyHours, setExtraStudyHours] = useState<number>(10);
   const [selectedSimSubject, setSelectedSimSubject] = useState<string>('ALL');
   const [topicTimerFilter, setTopicTimerFilter] = useState<'all' | string>('all');
+
+  // Academic Mastery System Memos
+  const pbState = useMemo(() => {
+    return evaluatePersonalBests(subjects, testResults, sessions);
+  }, [subjects, testResults, sessions]);
+
+  const academicMilestones = useMemo(() => {
+    return evaluateAcademicMilestones(subjects, testResults, sessions, loadMistakes());
+  }, [subjects, testResults, sessions]);
 
   // Compute Total Timer Minutes & Topic Breakdown
   const totalTimerMinutes = useMemo(() => {
@@ -328,6 +341,19 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 1. PERSONAL BESTS SYSTEM */}
+      <PersonalBestsCard
+        records={pbState.records}
+        subjectBests={pbState.subjectBests}
+        compact={false}
+      />
+
+      {/* 2. ACADEMIC MILESTONES SYSTEM */}
+      <MilestonesCard
+        milestones={academicMilestones}
+        compact={false}
+      />
 
       {/* TOP HIGH-YIELD GAPS TO ACCELERATE SCORE */}
       {weakTopicsList.length > 0 && (

@@ -26,7 +26,8 @@ import {
   Zap,
   BookmarkCheck,
   FileCheck,
-  RotateCcw
+  RotateCcw,
+  MessageSquare
 } from 'lucide-react';
 import { ActiveTab, Subject } from '../types';
 
@@ -49,6 +50,31 @@ interface CommandPaletteProps {
   onSelectSubject?: (subjectId: string) => void;
   onToggleTheme?: () => void;
   onTriggerAutonomousPushTest?: () => void;
+  onOpenRevisionBatchTriage?: () => void;
+  onOpenMCQAutopsy?: () => void;
+  onOpenBlurtingDiff?: () => void;
+  onOpenCrossTopicSynthesizer?: () => void;
+  onOpenSocraticViva?: () => void;
+  onOpenDailyProgressSync?: () => void;
+  onOpenPrintableDocket?: () => void;
+  onOpenSeniorLocker?: () => void;
+  onOpenExternalAIBridge?: () => void;
+  onOpenVoiceFeynman?: () => void;
+  onOpenKnowledgeTree?: () => void;
+  onOpenPredictiveGrades?: () => void;
+  onOpenExamAutomationModal?: () => void;
+  onOpenWhatsAppModal?: () => void;
+  onOpenEmailAgendaModal?: () => void;
+  onOpenMaterialImport?: () => void;
+  onOpenWorkspaceHub?: () => void;
+  onOpenAudioStudy?: () => void;
+  onOpenPrintKit?: () => void;
+  onOpenQRScanner?: () => void;
+  onOpenPreExamTriage?: () => void;
+  onOpenGoogleChat?: () => void;
+  onOpenNotificationDiagnostics?: () => void;
+  onOpenTranscriptionStudio?: () => void;
+  onSyncDataBridge?: () => void;
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
@@ -58,7 +84,32 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   subjects,
   onSelectSubject,
   onToggleTheme,
-  onTriggerAutonomousPushTest
+  onTriggerAutonomousPushTest,
+  onOpenPreExamTriage,
+  onOpenRevisionBatchTriage,
+  onOpenMCQAutopsy,
+  onOpenBlurtingDiff,
+  onOpenCrossTopicSynthesizer,
+  onOpenSocraticViva,
+  onOpenDailyProgressSync,
+  onOpenPrintableDocket,
+  onOpenSeniorLocker,
+  onOpenExternalAIBridge,
+  onOpenVoiceFeynman,
+  onOpenKnowledgeTree,
+  onOpenPredictiveGrades,
+  onOpenExamAutomationModal,
+  onOpenWhatsAppModal,
+  onOpenEmailAgendaModal,
+  onOpenGoogleChat,
+  onOpenMaterialImport,
+  onOpenWorkspaceHub,
+  onOpenAudioStudy,
+  onOpenPrintKit,
+  onOpenQRScanner,
+  onOpenNotificationDiagnostics,
+  onOpenTranscriptionStudio,
+  onSyncDataBridge
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -98,6 +149,64 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Build command items
   const commands: CommandItem[] = [
     // High-priority quick actions
+    {
+      id: 'study_cockpit',
+      title: 'Unified Daily Study Cockpit',
+      subtitle: 'Complete all-in-one focus loop: topic select, timer, active recall check & sign-off',
+      category: 'Navigation',
+      icon: <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />,
+      badge: 'Unified Cockpit',
+      keywords: ['cockpit', 'focus', 'timer', 'sprint', 'recall', 'blurt', 'sign hours'],
+      action: () => {
+        setActiveTab('study_cockpit');
+        onClose();
+      }
+    },
+    {
+      id: 'notification_diagnostics',
+      title: 'Notification Diagnostics & Alert Fix',
+      subtitle: 'Test audio alarm, verify desktop push, and unblock browser permissions',
+      category: 'Workspace & Settings',
+      icon: <Bell className="w-4 h-4 text-amber-500" />,
+      badge: 'Diagnostics',
+      keywords: ['notification', 'push', 'alert', 'chime', 'sound', 'fix', 'permission', 'reminders'],
+      action: () => {
+        if (onOpenNotificationDiagnostics) {
+          onOpenNotificationDiagnostics();
+        }
+        onClose();
+      }
+    },
+    {
+      id: 'transcription_studio',
+      title: 'Voice & Audio Transcription Studio (Gemini Cook)',
+      subtitle: 'Record voice explanations, Feynman viva, or audio files and cook with Gemini AI',
+      category: 'Workspace & Settings',
+      icon: <Flame className="w-4 h-4 text-orange-500" />,
+      badge: '🔥 Gemini Cook',
+      keywords: ['transcribe', 'voice', 'audio', 'record', 'cook', 'speech', 'microphone', 'dictation', 'feynman'],
+      action: () => {
+        if (onOpenTranscriptionStudio) {
+          onOpenTranscriptionStudio();
+        }
+        onClose();
+      }
+    },
+    {
+      id: 'screen_link_sync',
+      title: 'Link & Sync with Builder App / External Screen',
+      subtitle: 'Instantly transfer all study sessions, syllabus edits, and active timer across screens',
+      category: 'Workspace & Settings',
+      icon: <Zap className="w-4 h-4 text-cyan-500" />,
+      badge: 'Live Bridge',
+      keywords: ['sync', 'link', 'builder', 'external', 'transfer', 'timer link', 'cross-screen', 'data transfer'],
+      action: () => {
+        if (onSyncDataBridge) {
+          onSyncDataBridge();
+        }
+        onClose();
+      }
+    },
     {
       id: 'knowledge_refurbish',
       title: 'Knowledge Refurbishment Mode',
@@ -261,6 +370,32 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       }
     },
     {
+      id: 'personal_bests',
+      title: 'Personal Bests & Academic Milestones',
+      subtitle: 'Self-comparison metrics across 14 academic dimensions and verified achievements',
+      category: 'Exam Prep',
+      icon: <Trophy className="w-4 h-4 text-amber-500" />,
+      badge: 'NEW PB',
+      keywords: ['personal bests', 'milestones', 'records', 'highest score', 'pb', 'streak', 'achievement'],
+      action: () => {
+        setActiveTab('personal_bests');
+        onClose();
+      }
+    },
+    {
+      id: 'things_you_keep_forgetting',
+      title: 'Things You Keep Forgetting (Recurring Weaknesses)',
+      subtitle: 'Targeted remediation radar for concepts repeatedly missed across tests',
+      category: 'Exam Prep',
+      icon: <BookmarkCheck className="w-4 h-4 text-rose-500" />,
+      badge: 'FIX',
+      keywords: ['things i keep forgetting', 'recurring weaknesses', 'blind spots', 'fix weakness', 'traps'],
+      action: () => {
+        setActiveTab('personal_bests');
+        onClose();
+      }
+    },
+    {
       id: 'planner',
       title: 'Study Planner & Timetable',
       subtitle: 'Automated revision schedule and daily targets',
@@ -281,6 +416,449 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['theme', 'dark', 'light', 'mode', 'color'],
       action: () => {
         if (onToggleTheme) onToggleTheme();
+        onClose();
+      }
+    },
+    {
+      id: 'emergency_24h_cram_triage',
+      title: '🚨 Emergency 24-Hour Pre-Exam Triage Desk & Cram Sheet',
+      subtitle: 'High-stakes triage matrix, formula traps from Mistake Vault, and printable 1-page A4 dossier',
+      category: 'Exam Prep',
+      icon: <Zap className="w-4 h-4 text-rose-500 fill-current" />,
+      badge: '24h Triage',
+      keywords: ['cram', 'emergency', 'triage', '24h', 'exam', 'cheat sheet', 'formula', 'print', 'a4', 'primer', 'cram desk'],
+      action: () => {
+        if (onOpenPreExamTriage) onOpenPreExamTriage();
+        else setActiveTab('calendar');
+        onClose();
+      }
+    },
+    {
+      id: 'option_5_batch_triage',
+      title: 'Option 5: 1-3-7 Revision Batch Triage',
+      subtitle: 'Swipe or rapid-key triage all Day 1, 3, and 7 spaced revision tasks due today',
+      category: 'Exam Prep',
+      icon: <RotateCcw className="w-4 h-4 text-indigo-500 animate-spin-slow" />,
+      badge: 'Option 5',
+      keywords: ['option 5', 'batch', 'triage', '137', 'spaced', 'cards', 'rapid'],
+      action: () => {
+        if (onOpenRevisionBatchTriage) onOpenRevisionBatchTriage();
+        else setActiveTab('137_revision');
+        onClose();
+      }
+    },
+    {
+      id: 'option_10_mcq_autopsy',
+      title: 'Option 10: Wrong MCQ Distractor Autopsy',
+      subtitle: 'Paste any missed question & analyze trap mechanisms, distractor fallacies, and cognitive failure vectors',
+      category: 'Exam Prep',
+      icon: <BookmarkCheck className="w-4 h-4 text-rose-500" />,
+      badge: 'Option 10',
+      keywords: ['option 10', 'mcq', 'autopsy', 'wrong question', 'paste', 'distractor', 'careless', 'trap'],
+      action: () => {
+        if (onOpenMCQAutopsy) onOpenMCQAutopsy();
+        else setActiveTab('mistake_vault');
+        onClose();
+      }
+    },
+    {
+      id: 'option_15_blurting_diff',
+      title: 'Option 15: 3-Minute Blurting & Recall Diff Canvas',
+      subtitle: 'Active recall brain-dump with side-by-side rubric diffing and blind-spot detection',
+      category: 'Exam Prep',
+      icon: <Zap className="w-4 h-4 text-amber-500" />,
+      badge: 'Option 15',
+      keywords: ['option 15', 'blurting', 'diff', 'recall', 'canvas', 'active recall', 'brain dump'],
+      action: () => {
+        if (onOpenBlurtingDiff) onOpenBlurtingDiff();
+        else setActiveTab('blurt_recall');
+        onClose();
+      }
+    },
+    {
+      id: 'option_18_cross_topic',
+      title: 'Option 18: Cross-Topic Mistake Synthesizer',
+      subtitle: 'Cross-communicate and bridge compound misconceptions between your top mistake topics',
+      category: 'Exam Prep',
+      icon: <Network className="w-4 h-4 text-emerald-500" />,
+      badge: 'Option 18',
+      keywords: ['option 18', 'cross topic', 'mesh', 'synthesizer', 'bridge', 'vault', 'compound'],
+      action: () => {
+        if (onOpenCrossTopicSynthesizer) onOpenCrossTopicSynthesizer();
+        else setActiveTab('mistake_vault');
+        onClose();
+      }
+    },
+    {
+      id: 'option_28_socratic_viva',
+      title: 'Option 28: Interactive Socratic Blind-Spot Viva',
+      subtitle: 'Step-by-step viva sandbox: Premise defense, boundary stress-testing & cognitive resilience verdict',
+      category: 'Exam Prep',
+      icon: <Brain className="w-4 h-4 text-purple-500" />,
+      badge: 'Option 28',
+      keywords: ['option 28', 'socratic', 'viva', 'blind spot', 'oral', 'sandbox', 'interrogation'],
+      action: () => {
+        if (onOpenSocraticViva) onOpenSocraticViva();
+        else setActiveTab('mistake_vault');
+        onClose();
+      }
+    },
+    {
+      id: 'daily_progress_sync',
+      title: 'Sync Daily Hours & Progress (QR / PIN / Email)',
+      subtitle: 'Transfer delivered study time, sessions, and streak across iPad, phone, or laptop without logging in',
+      category: 'Workspace & Settings',
+      icon: <Clock className="w-4 h-4 text-emerald-500" />,
+      badge: 'Sync Hours',
+      keywords: ['hours', 'transfer', 'qr', 'pin', 'ipad', 'email', 'progress', 'daily sync'],
+      action: () => {
+        if (onOpenDailyProgressSync) onOpenDailyProgressSync();
+        onClose();
+      }
+    },
+    {
+      id: 'printable_docket',
+      title: 'Distraction-Free Printable A4 Study Docket',
+      subtitle: 'Generate printable offline study docket to study deeply away from screens',
+      category: 'Academic Retrieval',
+      icon: <BookOpen className="w-4 h-4 text-emerald-600" />,
+      badge: 'Offline A4',
+      keywords: ['printable', 'a4', 'docket', 'offline', 'paper', 'worksheet'],
+      action: () => {
+        if (onOpenPrintableDocket) onOpenPrintableDocket();
+        onClose();
+      }
+    },
+    {
+      id: 'senior_locker',
+      title: 'Senior Resource Locker',
+      subtitle: 'Access senior topper notes, past exam trap formulas, and annotated high-yield cheat sheets',
+      category: 'Academic Retrieval',
+      icon: <Trophy className="w-4 h-4 text-amber-500" />,
+      badge: 'Topper Kit',
+      keywords: ['senior', 'locker', 'topper', 'notes', 'past paper', 'cheat sheet'],
+      action: () => {
+        if (onOpenSeniorLocker) onOpenSeniorLocker();
+        onClose();
+      }
+    },
+    {
+      id: 'external_ai_bridge',
+      title: 'External AI Prompt Bridge (Claude, ChatGPT, Gemini)',
+      subtitle: 'Option 3: Copy pre-formatted deep academic prompts into free web Claude or ChatGPT',
+      category: 'Academic Retrieval',
+      icon: <Sparkles className="w-4 h-4 text-indigo-500" />,
+      badge: '$0 Free Web',
+      keywords: ['claude', 'chatgpt', 'gemini', 'prompts', 'external', 'bridge', 'option 3'],
+      action: () => {
+        if (onOpenExternalAIBridge) onOpenExternalAIBridge();
+        onClose();
+      }
+    },
+    {
+      id: 'voice_feynman',
+      title: 'Voice Feynman Oral Defense Exam',
+      subtitle: 'Verbally articulate concepts against an interactive Socratic examiner',
+      category: 'Exam Prep',
+      icon: <Brain className="w-4 h-4 text-rose-500" />,
+      badge: 'Voice Oral',
+      keywords: ['voice', 'feynman', 'oral', 'defense', 'speaking', 'explain'],
+      action: () => {
+        if (onOpenVoiceFeynman) onOpenVoiceFeynman();
+        onClose();
+      }
+    },
+    {
+      id: 'knowledge_tree',
+      title: 'Visual Knowledge Tree & Mind Map',
+      subtitle: 'Interactive prerequisite hierarchy, node mastery, and blind-spot graph',
+      category: 'Academic Retrieval',
+      icon: <Network className="w-4 h-4 text-teal-500" />,
+      badge: 'Mind Map',
+      keywords: ['tree', 'mind map', 'nodes', 'prerequisites', 'hierarchy'],
+      action: () => {
+        if (onOpenKnowledgeTree) onOpenKnowledgeTree();
+        onClose();
+      }
+    },
+    {
+      id: 'predictive_grades',
+      title: 'Predictive Grade Simulator',
+      subtitle: 'Forecast final exam marks based on syllabus completion pace and mistake cure rates',
+      category: 'Exam Prep',
+      icon: <Flame className="w-4 h-4 text-blue-500" />,
+      badge: 'Simulator',
+      keywords: ['grade', 'predictive', 'simulator', 'forecast', 'marks', 'target'],
+      action: () => {
+        if (onOpenPredictiveGrades) onOpenPredictiveGrades();
+        onClose();
+      }
+    },
+    {
+      id: 'exam_automation',
+      title: '24/7 Automated Exam Countdown & Alerts',
+      subtitle: 'Configure automated background dispatches via email, WhatsApp, and push notifications',
+      category: 'Workspace & Settings',
+      icon: <Bell className="w-4 h-4 text-rose-500" />,
+      badge: '24/7 Alerts',
+      keywords: ['alerts', 'countdown', 'automation', 'exam date', 'dispatches'],
+      action: () => {
+        if (onOpenExamAutomationModal) onOpenExamAutomationModal();
+        onClose();
+      }
+    },
+    {
+      id: 'whatsapp_coach',
+      title: 'WhatsApp Study Companion',
+      subtitle: 'Send daily study flight plans to your WhatsApp and chat with study companion',
+      category: 'Workspace & Settings',
+      icon: <Sparkles className="w-4 h-4 text-emerald-500" />,
+      badge: 'WhatsApp',
+      keywords: ['whatsapp', 'coach', 'chat', 'mobile alerts'],
+      action: () => {
+        if (onOpenWhatsAppModal) onOpenWhatsAppModal();
+        onClose();
+      }
+    },
+    {
+      id: 'email_agenda',
+      title: 'Email Daily Study Flight Plan',
+      subtitle: 'Schedule automated morning 7:30 AM briefings with today\'s revision queue',
+      category: 'Workspace & Settings',
+      icon: <Bell className="w-4 h-4 text-blue-500" />,
+      badge: 'Morning Briefing',
+      keywords: ['email', 'agenda', 'morning', 'briefing', 'flight plan'],
+      action: () => {
+        if (onOpenEmailAgendaModal) onOpenEmailAgendaModal();
+        onClose();
+      }
+    },
+    {
+      id: 'google_chat_notifications',
+      title: 'Google Chat Study Notifications (Done vs Not Done Audit)',
+      subtitle: 'Dispatch structured audit cards of completed topics vs pending goals to your Google Chat space',
+      category: 'Workspace & Settings',
+      icon: <MessageSquare className="w-4 h-4 text-emerald-500" />,
+      badge: 'Google Chat',
+      keywords: ['google chat', 'chat', 'notification', 'audit', 'done', 'pending', 'webhook', 'spaces'],
+      action: () => {
+        if (onOpenGoogleChat) onOpenGoogleChat();
+        onClose();
+      }
+    },
+    {
+      id: 'study_habits',
+      title: 'Study Habits & Analytics Progress',
+      subtitle: 'Comprehensive 84-day heatmap, consistency streaks, and hour distributions',
+      category: 'Navigation',
+      icon: <Activity className="w-4 h-4 text-emerald-500" />,
+      keywords: ['habits', 'heatmap', 'analytics', 'hours', 'streak'],
+      action: () => {
+        setActiveTab('study_habits');
+        onClose();
+      }
+    },
+    {
+      id: 'missed_work',
+      title: 'Missed Work Recovery',
+      subtitle: 'Catch up on overdue tasks, assignments, and test preparation deadlines',
+      category: 'Navigation',
+      icon: <ShieldAlert className="w-4 h-4 text-rose-500" />,
+      keywords: ['missed', 'overdue', 'catch up', 'backlog'],
+      action: () => {
+        setActiveTab('missed_work');
+        onClose();
+      }
+    },
+    {
+      id: 'assignments',
+      title: 'Assignments & Homework Tracker',
+      subtitle: 'Manage upcoming homework, coursework, and school deadlines',
+      category: 'Navigation',
+      icon: <CheckSquare className="w-4 h-4 text-blue-500" />,
+      keywords: ['assignments', 'homework', 'projects', 'deadlines'],
+      action: () => {
+        setActiveTab('assignments');
+        onClose();
+      }
+    },
+    {
+      id: 'classroom',
+      title: 'Google Classroom Hub',
+      subtitle: 'Sync course streams, announcements, and course materials',
+      category: 'Navigation',
+      icon: <Layers className="w-4 h-4 text-emerald-500" />,
+      keywords: ['classroom', 'courses', 'stream', 'materials'],
+      action: () => {
+        setActiveTab('classroom');
+        onClose();
+      }
+    },
+    {
+      id: 'groups',
+      title: 'Collaborative Study Circles',
+      subtitle: 'Group study rooms, shared syllabus targets, and AI facilitator',
+      category: 'Navigation',
+      icon: <Users className="w-4 h-4 text-amber-500" />,
+      keywords: ['groups', 'circles', 'peers', 'collaborative'],
+      action: () => {
+        setActiveTab('groups');
+        onClose();
+      }
+    },
+    {
+      id: 'tests',
+      title: 'Tests & Mock Exam Simulator',
+      subtitle: 'Simulate full board examination conditions with strict timers and mark schemes',
+      category: 'Exam Prep',
+      icon: <FileCheck className="w-4 h-4 text-primary" />,
+      keywords: ['tests', 'mocks', 'exam simulator', 'past papers'],
+      action: () => {
+        setActiveTab('tests');
+        onClose();
+      }
+    },
+    {
+      id: 'blurt_recall',
+      title: 'Blurt Recall Active Arena',
+      subtitle: 'Rapid timed closed-book active recall brain dump with instant syllabus audit',
+      category: 'Exam Prep',
+      icon: <Zap className="w-4 h-4 text-amber-500" />,
+      keywords: ['blurt', 'active recall', 'brain dump'],
+      action: () => {
+        setActiveTab('blurt_recall');
+        onClose();
+      }
+    },
+    {
+      id: 'paper_auto_forcing',
+      title: 'Exam Paper Auto-Forcing Mode',
+      subtitle: 'Forced past paper execution schedule with progressive difficulty pacing',
+      category: 'Exam Prep',
+      icon: <ShieldAlert className="w-4 h-4 text-rose-500" />,
+      keywords: ['forcing', 'auto-forcing', 'papers', 'schedule'],
+      action: () => {
+        setActiveTab('paper_auto_forcing');
+        onClose();
+      }
+    },
+    {
+      id: 'mistake_vault',
+      title: 'Exam Autopsy & Mistake Vault',
+      subtitle: 'Track cognitive error classifications, careless slips, and 100% cure rate drills',
+      category: 'Exam Prep',
+      icon: <BookmarkCheck className="w-4 h-4 text-amber-500" />,
+      keywords: ['mistake', 'vault', 'autopsy', 'careless', 'cure rate'],
+      action: () => {
+        setActiveTab('mistake_vault');
+        onClose();
+      }
+    },
+    {
+      id: 'vaults',
+      title: 'Academic Storage Vaults',
+      subtitle: 'Subject resource lockers, past paper files, and formula sheets',
+      category: 'Navigation',
+      icon: <Layers className="w-4 h-4 text-stone-500" />,
+      keywords: ['vaults', 'storage', 'files', 'resources'],
+      action: () => {
+        setActiveTab('vaults');
+        onClose();
+      }
+    },
+    {
+      id: 'gamification',
+      title: 'RPG Quests & Academic Leveling',
+      subtitle: 'Earn study XP, level up academic ranks, and unlock study gear',
+      category: 'Navigation',
+      icon: <Trophy className="w-4 h-4 text-amber-500" />,
+      keywords: ['rpg', 'quests', 'xp', 'level', 'gamification'],
+      action: () => {
+        setActiveTab('gamification');
+        onClose();
+      }
+    },
+    {
+      id: 'virtual_room',
+      title: 'Virtual Study Room & Lo-Fi Lounge',
+      subtitle: 'Distraction-free ambient study room with binaural soundscapes',
+      category: 'Navigation',
+      icon: <Clock className="w-4 h-4 text-indigo-500" />,
+      keywords: ['study room', 'lo-fi', 'ambient', 'virtual'],
+      action: () => {
+        setActiveTab('virtual_room');
+        onClose();
+      }
+    },
+    {
+      id: 'progress',
+      title: 'Overall Academic Progress & Velocity',
+      subtitle: 'Curriculum completion percentages, weekly hours, and exam readiness',
+      category: 'Navigation',
+      icon: <Activity className="w-4 h-4 text-blue-500" />,
+      keywords: ['progress', 'velocity', 'completion', 'analytics'],
+      action: () => {
+        setActiveTab('progress');
+        onClose();
+      }
+    },
+    {
+      id: 'tutor',
+      title: 'Socratic AI Tutor',
+      subtitle: 'Deep conceptual explanations, step-by-step math breakdowns, and exam tips',
+      category: 'Navigation',
+      icon: <Bot className="w-4 h-4 text-purple-500" />,
+      keywords: ['tutor', 'ai tutor', 'socratic', 'explain'],
+      action: () => {
+        setActiveTab('tutor');
+        onClose();
+      }
+    },
+    {
+      id: 'activity',
+      title: 'Academic Activity & Audit Trail',
+      subtitle: 'Historical timeline of completed sessions, test scores, and revisions',
+      category: 'Navigation',
+      icon: <Activity className="w-4 h-4 text-stone-500" />,
+      keywords: ['activity', 'log', 'history', 'timeline'],
+      action: () => {
+        setActiveTab('activity');
+        onClose();
+      }
+    },
+    {
+      id: 'data_backup',
+      title: 'Data Portability & Encrypted Cloud Backup',
+      subtitle: 'Download complete offline encrypted JSON snapshots or restore data',
+      category: 'Workspace & Settings',
+      icon: <HardDrive className="w-4 h-4 text-emerald-600" />,
+      keywords: ['backup', 'restore', 'export', 'data', 'json'],
+      action: () => {
+        setActiveTab('data_backup');
+        onClose();
+      }
+    },
+    {
+      id: 'calendar',
+      title: 'Unified Academic Calendar',
+      subtitle: 'Interactive schedule, exam milestones, and Google Calendar sync',
+      category: 'Navigation',
+      icon: <Calendar className="w-4 h-4 text-sky-500" />,
+      keywords: ['calendar', 'schedule', 'timetable'],
+      action: () => {
+        setActiveTab('calendar');
+        onClose();
+      }
+    },
+    {
+      id: 'revision',
+      title: 'Revision Ledger & Queue',
+      subtitle: 'All scheduled revisions and historical topic retention metrics',
+      category: 'Navigation',
+      icon: <RotateCcw className="w-4 h-4 text-amber-500" />,
+      keywords: ['revision', 'ledger', 'queue'],
+      action: () => {
+        setActiveTab('revision');
         onClose();
       }
     },

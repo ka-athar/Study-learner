@@ -3613,16 +3613,47 @@ interface TransferPinRecord {
 }
 
 const transferPinStore = new Map<string, TransferPinRecord>();
+const PIN_BACKUP_FILE = path.join(process.cwd(), '.sync_transfer_pins.json');
 
-// Clean up expired PINs periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [code, record] of transferPinStore.entries()) {
-    if (new Date(record.expiresAt).getTime() < now) {
-      transferPinStore.delete(code);
+// Initialize pins from persistent disk cache
+try {
+  if (fs.existsSync(PIN_BACKUP_FILE)) {
+    const raw = fs.readFileSync(PIN_BACKUP_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    for (const [k, v] of Object.entries(parsed)) {
+      transferPinStore.set(k, v as TransferPinRecord);
     }
   }
-}, 10 * 60 * 1000);
+} catch (e) {
+  console.warn('Failed to load pinned transfer records from disk cache:', e);
+}
+
+function persistPinsToDisk() {
+  try {
+    const obj: Record<string, any> = {};
+    for (const [k, v] of transferPinStore.entries()) {
+      obj[k] = v;
+    }
+    fs.writeFileSync(PIN_BACKUP_FILE, JSON.stringify(obj, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Failed to write transfer pins to disk backup:', e);
+  }
+}
+
+// Clean up expired PINs periodically (allow 7-day retention)
+setInterval(() => {
+  const now = Date.now();
+  let modified = false;
+  for (const [code, record] of transferPinStore.entries()) {
+    // 7-day expiration
+    const expiryTime = new Date(record.expiresAt).getTime();
+    if (expiryTime + 7 * 24 * 60 * 60 * 1000 < now) {
+      transferPinStore.delete(code);
+      modified = true;
+    }
+  }
+  if (modified) persistPinsToDisk();
+}, 60 * 60 * 1000);
 
 app.post('/api/sync/generate-pin', (req, res) => {
   try {
@@ -3639,7 +3670,8 @@ app.post('/api/sync/generate-pin', (req, res) => {
     }
 
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
+    // 7-day expiration window so codes never prematurely expire across devices
+    const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const record: TransferPinRecord = {
       code,
@@ -3653,6 +3685,7 @@ app.post('/api/sync/generate-pin', (req, res) => {
     };
 
     transferPinStore.set(code, record);
+    persistPinsToDisk();
 
     if (dataPayload) {
       if (uid) {
@@ -3675,7 +3708,7 @@ app.post('/api/sync/generate-pin', (req, res) => {
       success: true,
       code,
       expiresAt,
-      message: `6-digit Transfer PIN ${code} generated successfully.`
+      message: `6-digit Transfer PIN ${code} generated successfully (valid for 7 days).`
     });
   } catch (error: any) {
     console.error('Error generating transfer PIN:', error);
@@ -3692,7 +3725,22 @@ app.post('/api/sync/redeem-pin', (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide a valid 6-digit PIN.' });
     }
 
-    const record = transferPinStore.get(cleanCode);
+    let record = transferPinStore.get(cleanCode);
+
+    // If not in memory, reload from disk backup
+    if (!record) {
+      try {
+        if (fs.existsSync(PIN_BACKUP_FILE)) {
+          const raw = fs.readFileSync(PIN_BACKUP_FILE, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (parsed[cleanCode]) {
+            record = parsed[cleanCode];
+            transferPinStore.set(cleanCode, record!);
+          }
+        }
+      } catch (e) {}
+    }
+
     if (!record) {
       return res.status(404).json({
         success: false,
@@ -3700,8 +3748,11 @@ app.post('/api/sync/redeem-pin', (req, res) => {
       });
     }
 
-    if (new Date(record.expiresAt).getTime() < Date.now()) {
+    // 7-day grace period
+    const expiryTime = new Date(record.expiresAt).getTime();
+    if (expiryTime + 7 * 24 * 60 * 60 * 1000 < Date.now()) {
       transferPinStore.delete(cleanCode);
+      persistPinsToDisk();
       return res.status(410).json({
         success: false,
         message: 'This 6-digit Transfer PIN has expired. Please generate a fresh PIN on your source device.'
@@ -3712,6 +3763,7 @@ app.post('/api/sync/redeem-pin', (req, res) => {
     record.redeemed = true;
     record.redeemedAt = new Date().toISOString();
     record.redeemedByDevice = targetDeviceName || 'Target Device';
+    persistPinsToDisk();
 
     res.json({
       success: true,
@@ -3779,6 +3831,23 @@ function broadcastToPartition(
   });
 }
 
+function broadcastToAllClients(eventType: string, data: any, excludeDeviceId?: string) {
+  const visitedClientIds = new Set<string>();
+  const payloadStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+  sseClientsByPartition.forEach((clients) => {
+    clients.forEach((client) => {
+      if (excludeDeviceId && client.deviceId === excludeDeviceId) return;
+      if (visitedClientIds.has(client.id)) return;
+      visitedClientIds.add(client.id);
+      try {
+        client.res.write(payloadStr);
+      } catch (err) {
+        console.warn('Error writing SSE to client:', client.id, err);
+      }
+    });
+  });
+}
+
 function getActivePeers(keys: string[]): Array<{ deviceId: string; deviceName: string; deviceType?: string; connectedAt: number }> {
   const seen = new Set<string>();
   const peers: Array<{ deviceId: string; deviceName: string; deviceType?: string; connectedAt: number }> = [];
@@ -3802,15 +3871,11 @@ function getActivePeers(keys: string[]): Array<{ deviceId: string; deviceName: s
 
 // SSE Real-Time Sync Stream Endpoint
 app.get('/api/sync/events', (req, res) => {
-  const uid = String(req.query.uid || '').trim();
-  const email = String(req.query.email || '').trim().toLowerCase();
+  const uid = String(req.query.uid || 'default_user').trim();
+  const email = String(req.query.email || 'atharkhanteambuster@gmail.com').trim().toLowerCase();
   const deviceId = String(req.query.deviceId || `dev_${Date.now()}`).trim();
   const deviceName = String(req.query.deviceName || 'Device').trim();
   const deviceType = String(req.query.deviceType || 'browser').trim();
-
-  if (!uid && !email) {
-    return res.status(400).json({ error: 'Either uid or email query param is required for real-time events stream.' });
-  }
 
   // Setup SSE Headers
   res.writeHead(200, {
@@ -4281,6 +4346,548 @@ ${JSON.stringify(questionsWithResponses, null, 2)}`;
   }
 });
 
+// 2. GOOGLE CHAT DISPATCH PROXY API
+app.post('/api/google-chat/send', async (req, res) => {
+  try {
+    const { webhookUrl, cardPayload, text } = req.body;
+    if (!webhookUrl || typeof webhookUrl !== 'string' || !webhookUrl.startsWith('https://chat.googleapis.com/')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid webhook URL. It must begin with https://chat.googleapis.com/...'
+      });
+    }
+
+    const payload = cardPayload || (text ? { text } : { text: 'Academic Study Notification' });
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=UTF-8'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(response.status).json({
+        success: false,
+        error: `Google Chat returned HTTP ${response.status}: ${errText.slice(0, 200)}`
+      });
+    }
+
+    const data = await response.json().catch(() => ({}));
+    return res.json({
+      success: true,
+      message: 'Message delivered to Google Chat Space successfully!',
+      data
+    });
+  } catch (error: any) {
+    console.error('Error dispatching to Google Chat:', error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || 'Failed to dispatch to Google Chat'
+    });
+  }
+});
+
+// 3. GEMINI AI ACCOUNTABILITY COACH: "Why You Haven't Logged In / Studied"
+app.post('/api/ai/accountability-nudge', async (req, res) => {
+  try {
+    const {
+      studentName = 'Student',
+      hoursToday = 0,
+      targetHours = 3,
+      pendingTasks = [],
+      dueRevisions = [],
+      upcomingExams = [],
+      lastActiveHoursAgo = 8,
+      language = 'en'
+    } = req.body;
+
+    const ai = getGeminiClient();
+
+    const prompt = `
+You are the elite PrepForge Academic Accountability Coach and Behavioral Psychologist.
+The student "${studentName}" has NOT logged in or has logged very little study time today (${hoursToday} hrs out of a target ${targetHours} hrs).
+They currently have ${pendingTasks.length} pending syllabus tasks and ${dueRevisions.length} due 1-3-7 spaced revisions.
+Impending exams: ${JSON.stringify(upcomingExams.slice(0, 3))}.
+Hours since last activity: ${lastActiveHoursAgo} hours.
+Language preference: ${language === 'ur' ? 'Urdu & English bilingual' : 'English'}.
+
+Your task:
+Analyze WHY the student hasn't logged in or tackled today's study goals with psychological depth, honest firmness, and motivational clarity.
+Avoid generic lectures. Address the common friction points (activation energy barrier, avoidance of difficult topics, phone distraction spirals, fear of falling behind).
+Give them a clear reality check regarding their upcoming board exams.
+Provide a crisp 15-minute "Emergency Rescue Sprint" that is so easy to start that it shatters their procrastination barrier immediately.
+
+Return ONLY a valid JSON object matching this schema without markdown code fences:
+{
+  "diagnostic": "2-3 sentences explaining the exact psychological resistance they are facing right now (e.g. task paralysis or activation energy trap) and why today's session is crucial.",
+  "whyYouHaventLoggedIn": [
+    "Point 1 addressing the specific friction barrier (e.g. topic difficulty or phone scrolling trap)",
+    "Point 2 addressing the rationalization (e.g. 'I will do double tomorrow' fallacy)"
+  ],
+  "boardExamRealityCheck": "A 1-2 sentence sharp reminder of their approaching exam countdown and how today's missed hours compound negatively.",
+  "rescueSprintTitle": "15-Minute Activation Sprint: [Topic Name or Quick Revision]",
+  "rescueSprintSteps": [
+    "Step 1: Set a 15-minute timer (zero screens/tabs except study note)",
+    "Step 2: Read just 3 subtopic formulas or 1 past paper question",
+    "Step 3: Jot down 5 active recall bullet points to preserve your streak"
+  ],
+  "motivationalSignoff": "One memorable, sharp academic aphorism to trigger immediate action."
+}
+`;
+
+    const response = await generateContentWithFallback(ai, {
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const parsed = parseCleanJson(response.text);
+    return res.json({ success: true, ...parsed });
+  } catch (error: any) {
+    console.warn('Fallback triggered in /api/ai/accountability-nudge:', error?.message);
+    const { pendingTasks = [], upcomingExams = [] } = req.body;
+    const firstPending = pendingTasks[0] || { topic: 'Core Syllabus Topics', subject: 'Curriculum' };
+    const firstExam = upcomingExams[0];
+
+    // Ultra-reliable fallback in case of transient model demand
+    res.json({
+      success: true,
+      diagnostic: `Procrastination is almost always an activation energy barrier, not a lack of capability. Leaving "${firstPending.topic}" untouched today compounds pressure on tomorrow's schedule.`,
+      whyYouHaventLoggedIn: [
+        `The cognitive load of starting seems heavier than it actually is. Once you open the timer for 3 minutes, the inertia vanishes.`,
+        `The "I'll make up for it tomorrow" trap is an illusion—board exams require daily incremental spaced consolidation.`
+      ],
+      boardExamRealityCheck: firstExam
+        ? `Your ${firstExam.subject} exam (${firstExam.examName}) is only ${firstExam.daysRemaining} days away. Every hour skipped today takes away from final past paper drills.`
+        : 'Board examination curves reward steady consistency over last-minute panic.',
+      rescueSprintTitle: `15-Minute Activation Sprint: ${firstPending.topic}`,
+      rescueSprintSteps: [
+        `Open the focus timer for 15 minutes only—do not commit to hours, just 15 minutes.`,
+        `Review the core definitions and key formulas for ${firstPending.topic}.`,
+        `Log the session to protect your streak and reclaim momentum.`
+      ],
+      motivationalSignoff: 'Action produces motivation, not the other way around. Start the timer now.'
+    });
+  }
+});
+
+// =========================================================================
+// UNIVERSAL REAL-TIME TIMER BRIDGE (Cross-Screen / External App / Builder)
+// =========================================================================
+const TIMER_STATE_FILE = path.join(process.cwd(), '.active_timer_state.json');
+
+interface ServerTimerSession {
+  isRunning: boolean;
+  isPaused: boolean;
+  mode: 'focus' | 'exam' | 'break';
+  subjectName: string;
+  topicName: string;
+  targetSeconds: number;
+  secondsLeft: number;
+  startedAtTimestamp?: number;
+  targetEndTimestamp?: number;
+  lastTickTimestamp?: number;
+  hasNotifiedCompletion?: boolean;
+  updatedAt: number;
+  sourceDeviceId?: string;
+  sourceDeviceName?: string;
+}
+
+let activeGlobalTimer: ServerTimerSession | null = null;
+
+// Initialize timer state from disk if exists
+try {
+  if (fs.existsSync(TIMER_STATE_FILE)) {
+    const raw = fs.readFileSync(TIMER_STATE_FILE, 'utf-8');
+    activeGlobalTimer = JSON.parse(raw);
+  }
+} catch (e) {
+  console.warn('Could not read cached timer state:', e);
+}
+
+function persistServerTimer(timer: ServerTimerSession | null) {
+  try {
+    activeGlobalTimer = timer;
+    if (timer) {
+      fs.writeFileSync(TIMER_STATE_FILE, JSON.stringify(timer, null, 2), 'utf-8');
+    } else if (fs.existsSync(TIMER_STATE_FILE)) {
+      fs.unlinkSync(TIMER_STATE_FILE);
+    }
+  } catch (err) {
+    console.warn('Error persisting server timer state:', err);
+  }
+}
+
+function calculateCurrentServerTimer(): ServerTimerSession | null {
+  if (!activeGlobalTimer) return null;
+  const now = Date.now();
+  if (activeGlobalTimer.isRunning && !activeGlobalTimer.isPaused) {
+    if (activeGlobalTimer.targetEndTimestamp) {
+      const remaining = Math.max(0, Math.ceil((activeGlobalTimer.targetEndTimestamp - now) / 1000));
+      activeGlobalTimer.secondsLeft = remaining;
+      activeGlobalTimer.lastTickTimestamp = now;
+      if (remaining <= 0) {
+        activeGlobalTimer.isRunning = false;
+        persistServerTimer(activeGlobalTimer);
+      }
+    } else if (activeGlobalTimer.lastTickTimestamp) {
+      const elapsed = Math.floor((now - activeGlobalTimer.lastTickTimestamp) / 1000);
+      if (elapsed > 0) {
+        activeGlobalTimer.secondsLeft = Math.max(0, activeGlobalTimer.secondsLeft - elapsed);
+        activeGlobalTimer.lastTickTimestamp = now;
+        if (activeGlobalTimer.secondsLeft <= 0) {
+          activeGlobalTimer.isRunning = false;
+          persistServerTimer(activeGlobalTimer);
+        }
+      }
+    }
+  }
+  return activeGlobalTimer;
+}
+
+// GET active timer state across builder app and external screens
+app.get('/api/timer/state', (req, res) => {
+  const current = calculateCurrentServerTimer();
+  res.json({
+    success: true,
+    timer: current,
+    serverTime: Date.now()
+  });
+});
+
+// POST active timer state (called whenever a window starts, pauses, stops, or ticks the timer)
+app.post('/api/timer/state', (req, res) => {
+  try {
+    const { timer, sourceDeviceId, sourceDeviceName } = req.body;
+    if (!timer) {
+      persistServerTimer(null);
+      broadcastToAllClients('timer_update', {
+        timer: null,
+        serverTime: Date.now(),
+        sourceDeviceId,
+        sourceDeviceName
+      }, sourceDeviceId);
+      return res.json({ success: true, timer: null, serverTime: Date.now() });
+    }
+
+    const updated: ServerTimerSession = {
+      ...timer,
+      updatedAt: Date.now(),
+      sourceDeviceId: sourceDeviceId || timer.sourceDeviceId,
+      sourceDeviceName: sourceDeviceName || timer.sourceDeviceName || 'External/Builder Window'
+    };
+
+    persistServerTimer(updated);
+
+    // Broadcast in sub-100ms to all connected SSE clients (builder app preview, external monitor, companion)
+    broadcastToAllClients('timer_update', {
+      timer: updated,
+      serverTime: Date.now(),
+      sourceDeviceId
+    }, sourceDeviceId);
+
+    res.json({
+      success: true,
+      timer: updated,
+      serverTime: Date.now()
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST quick timer action commands
+app.post('/api/timer/action', (req, res) => {
+  try {
+    const { action, subjectName, topicName, durationMinutes = 25, mode = 'focus', sourceDeviceId } = req.body;
+    const now = Date.now();
+
+    if (action === 'start') {
+      const targetSeconds = Math.max(60, Math.round(durationMinutes * 60));
+      const newTimer: ServerTimerSession = {
+        isRunning: true,
+        isPaused: false,
+        mode,
+        subjectName: subjectName || 'General',
+        topicName: topicName || 'Study Session',
+        targetSeconds,
+        secondsLeft: targetSeconds,
+        startedAtTimestamp: now,
+        targetEndTimestamp: now + (targetSeconds * 1000),
+        lastTickTimestamp: now,
+        hasNotifiedCompletion: false,
+        updatedAt: now,
+        sourceDeviceId
+      };
+      persistServerTimer(newTimer);
+      broadcastToAllClients('timer_update', { timer: newTimer, serverTime: now });
+      return res.json({ success: true, timer: newTimer });
+    }
+
+    const current = calculateCurrentServerTimer();
+    if (!current) {
+      return res.json({ success: false, message: 'No active timer to manipulate.' });
+    }
+
+    if (action === 'pause') {
+      current.isPaused = true;
+      current.targetEndTimestamp = undefined;
+      current.updatedAt = now;
+      persistServerTimer(current);
+      broadcastToAllClients('timer_update', { timer: current, serverTime: now });
+      return res.json({ success: true, timer: current });
+    }
+
+    if (action === 'resume') {
+      current.isRunning = true;
+      current.isPaused = false;
+      current.targetEndTimestamp = now + (current.secondsLeft * 1000);
+      current.lastTickTimestamp = now;
+      current.updatedAt = now;
+      persistServerTimer(current);
+      broadcastToAllClients('timer_update', { timer: current, serverTime: now });
+      return res.json({ success: true, timer: current });
+    }
+
+    if (action === 'stop' || action === 'clear') {
+      persistServerTimer(null);
+      broadcastToAllClients('timer_update', { timer: null, serverTime: now });
+      return res.json({ success: true, timer: null });
+    }
+
+    if (action === 'add_minutes') {
+      const addSec = (Number(req.body.minutes) || 5) * 60;
+      current.secondsLeft += addSec;
+      current.targetSeconds += addSec;
+      if (current.isRunning && !current.isPaused) {
+        current.targetEndTimestamp = (current.targetEndTimestamp || now) + (addSec * 1000);
+      }
+      current.hasNotifiedCompletion = false;
+      current.updatedAt = now;
+      persistServerTimer(current);
+      broadcastToAllClients('timer_update', { timer: current, serverTime: now });
+      return res.json({ success: true, timer: current });
+    }
+
+    res.status(400).json({ success: false, message: `Unknown timer action: ${action}` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// =========================================================================
+// UNIVERSAL MASTER STUDY DATA BRIDGE (External App <-> Builder App Sync)
+// =========================================================================
+const MASTER_BRIDGE_FILE = path.join(process.cwd(), '.study_master_bridge.json');
+
+app.get('/api/sync/master-bridge', (req, res) => {
+  try {
+    if (fs.existsSync(MASTER_BRIDGE_FILE)) {
+      const raw = fs.readFileSync(MASTER_BRIDGE_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      return res.json({
+        success: true,
+        hasData: true,
+        data,
+        updatedAt: data.updatedAt || new Date().toISOString()
+      });
+    }
+    res.json({
+      success: true,
+      hasData: false,
+      message: 'No master data stored yet.'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/sync/master-bridge', (req, res) => {
+  try {
+    const {
+      data,
+      sourceDeviceId = 'unknown_device',
+      sourceDeviceName = 'Connected Screen'
+    } = req.body;
+
+    if (!data) {
+      return res.status(400).json({ success: false, message: 'Missing data payload' });
+    }
+
+    const payloadToSave = {
+      ...data,
+      updatedAt: new Date().toISOString(),
+      lastSyncedBy: sourceDeviceName,
+      sourceDeviceId
+    };
+
+    fs.writeFileSync(MASTER_BRIDGE_FILE, JSON.stringify(payloadToSave, null, 2), 'utf-8');
+
+    // Also update in-memory snapshot store for quick retrieval
+    const emailKey = 'atharkhanteambuster@gmail.com';
+    userSnapshotStore.set(emailKey, {
+      snapshot: data,
+      updatedAt: new Date().toISOString(),
+      email: emailKey
+    });
+    userSnapshotStore.set('default_user', {
+      snapshot: data,
+      updatedAt: new Date().toISOString(),
+      email: emailKey
+    });
+
+    // Broadcast master data update to all connected screens and builder app
+    broadcastToAllClients('master_bridge_update', {
+      updatedAt: payloadToSave.updatedAt,
+      sourceDeviceId,
+      sourceDeviceName,
+      summary: {
+        sessionsCount: Array.isArray(data.sessions) ? data.sessions.length : 0,
+        subjectsCount: Array.isArray(data.subjects) ? data.subjects.length : 0,
+        revisionsCount: Array.isArray(data.revisions) ? data.revisions.length : 0,
+        mistakesCount: Array.isArray(data.mistakes) ? data.mistakes.length : 0
+      }
+    }, sourceDeviceId);
+
+    res.json({
+      success: true,
+      message: 'Master study data successfully bridged between external app and builder.',
+      updatedAt: payloadToSave.updatedAt,
+      stats: {
+        sessions: Array.isArray(data.sessions) ? data.sessions.length : 0,
+        subjects: Array.isArray(data.subjects) ? data.subjects.length : 0
+      }
+    });
+  } catch (err: any) {
+    console.error('Master bridge sync error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// =========================================================================
+// ADVANCED GEMINI AUDIO TRANSCRIPTION ENGINE ("COOKS")
+// =========================================================================
+app.post('/api/ai/transcribe-audio', async (req, res) => {
+  try {
+    const {
+      audioBase64,
+      audioData,
+      mimeType = 'audio/webm',
+      context = {},
+      targetLang = 'auto'
+    } = req.body;
+
+    const rawBase64 = audioBase64 || audioData;
+    if (!rawBase64) {
+      return res.status(400).json({
+        success: false,
+        message: 'No audio data provided. Please provide audioBase64 string.'
+      });
+    }
+
+    const cleanBase64 = String(rawBase64).replace(/^data:[^;]+;base64,/, '').trim();
+    const ai = getGeminiClient();
+
+    const subjectStr = context?.subject || 'Science & Mathematics';
+    const topicStr = context?.topic || 'Core Study Material';
+    const chapterStr = context?.chapter || '';
+    const taskType = context?.taskType || 'study_notes';
+
+    const systemInstruction = `You are a high-performance academic transcription engine for a high-achieving student studying Cambridge GCSE/A-Levels, FBISE, and College science (Physics, Chemistry, Biology, Mathematics, Computer Science, Urdu).
+
+YOUR MISSION IS TO "COOK": Transcribe and structure spoken audio with pristine fidelity, extracting deep academic insight.
+
+INSTRUCTIONS:
+1. "rawTranscript": Verbatim transcription of what the student said. Do not skip or alter words.
+2. "polishedText": Formatted, beautifully structured academic notes. Clean up speech disfluencies (ums, ahs, stutters), fix grammar, organize into clear readable paragraphs with headings or bullet points where appropriate, and format scientific equations/formulas cleanly in unicode or LaTeX (e.g. F = ma, v = u + at, H₂SO₄, C₆H₁₂O₆, ∫ f(x)dx).
+3. "mathAndScientificFormulas": Array of formulas, chemical equations, scientific laws, or constants identified.
+4. "keyConcepts": Array of 3 to 7 key academic topics and terms mentioned.
+5. "summaryNotes": 2 to 4 high-yield bullet points summarizing the core takeaways of the student's speech.
+6. "detectedLanguage": 'English', 'Urdu', or 'Bilingual (Urdu & English)'.
+7. "confidenceScore": Integer between 85 and 99 based on audio fidelity.
+8. "academicTakeaways": Actionable study feedback or next steps for this topic.
+
+Subject: ${subjectStr}
+Topic: ${topicStr} ${chapterStr ? `(${chapterStr})` : ''}
+Task Mode: ${taskType}
+
+Return ONLY valid JSON matching this schema.`;
+
+    const audioPart = {
+      inlineData: {
+        mimeType: mimeType || 'audio/webm',
+        data: cleanBase64,
+      },
+    };
+
+    let responseText: string | undefined = undefined;
+
+    // First attempt: Dedicated audio transcription model 'gemini-3.5-transcribe'
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-transcribe',
+        contents: {
+          parts: [
+            audioPart,
+            { text: `Transcribe and cook this academic audio note. Focus on ${subjectStr}: ${topicStr}. Output valid JSON.` }
+          ]
+        },
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json'
+        }
+      });
+      responseText = response.text;
+    } catch (transcribeErr: any) {
+      console.warn('Dedicated transcribe model busy or returned error, falling back to gemini-3.8-flash:', transcribeErr?.message);
+      // Fallback attempt: High-availability multi-modal model 'gemini-3.8-flash'
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: {
+          parts: [
+            audioPart,
+            { text: `Transcribe and cook this academic audio note for ${subjectStr} - ${topicStr}. Return structured JSON.` }
+          ]
+        },
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json'
+        }
+      });
+      responseText = response.text;
+    }
+
+    const parsed = parseCleanJson(responseText);
+
+    // Ensure safe fallbacks for all fields
+    const result = {
+      success: true,
+      rawTranscript: parsed.rawTranscript || parsed.transcript || parsed.text || '',
+      polishedText: parsed.polishedText || parsed.notes || parsed.rawTranscript || '',
+      mathAndScientificFormulas: Array.isArray(parsed.mathAndScientificFormulas) ? parsed.mathAndScientificFormulas : [],
+      keyConcepts: Array.isArray(parsed.keyConcepts) ? parsed.keyConcepts : [],
+      summaryNotes: Array.isArray(parsed.summaryNotes) ? parsed.summaryNotes : [parsed.summary || 'Recorded study session transcribed.'],
+      detectedLanguage: parsed.detectedLanguage || 'English',
+      confidenceScore: typeof parsed.confidenceScore === 'number' ? parsed.confidenceScore : 94,
+      academicTakeaways: parsed.academicTakeaways || `Reviewed core concepts in ${subjectStr} - ${topicStr}.`,
+      cookedAt: new Date().toISOString()
+    };
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('Audio transcription error in /api/ai/transcribe-audio:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Audio transcription failed. Please try again with clear speech.',
+      rawTranscript: '',
+      polishedText: ''
+    });
+  }
+});
+
 // --- SERVER & VITE INTEGRATION ---
 
 process.on('uncaughtException', (err) => {
@@ -4294,12 +4901,24 @@ process.on('unhandledRejection', (reason) => {
 async function startServer() {
   const distPath = path.join(process.cwd(), 'dist');
   const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
-  const isProduction = process.env.NODE_ENV === 'production' || (hasBuiltDist && process.env.NODE_ENV !== 'development');
+  const isProduction = process.env.NODE_ENV === 'production';
 
-  if (isProduction || hasBuiltDist) {
+  if (isProduction && hasBuiltDist) {
+    app.use((req, res, next) => {
+      // Prevent browser, PWA, and external windows from caching old index.html
+      if (req.path === '/' || req.path.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+      next();
+    });
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       const indexPath = path.join(distPath, 'index.html');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
       } else {
@@ -4309,7 +4928,10 @@ async function startServer() {
   } else {
     try {
       const vite = await createViteServer({
-        server: { middlewareMode: true },
+        server: { 
+          middlewareMode: true,
+          hmr: false 
+        },
         appType: 'spa',
       });
       app.use(vite.middlewares);

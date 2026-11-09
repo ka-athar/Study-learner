@@ -74,6 +74,7 @@ export interface UserNotificationProfile {
   telegramChatId?: string;          // Free Telegram Chat ID
   telegramBotToken?: string;        // Optional custom Telegram bot token
   discordWebhookUrl?: string;       // Free Discord incoming webhook
+  googleChatWebhookUrl?: string;    // Free Google Chat Space incoming webhook
   customWebhookUrl?: string;        // Free custom incoming webhook
   pushEnabled: boolean;
   pushSoundEnabled?: boolean;
@@ -884,6 +885,69 @@ export async function dispatchNotification(
       }
     } catch (discErr: any) {
       console.warn('[NotificationEngine] Discord dispatch error:', discErr);
+    }
+  }
+
+  // 2d. Google Chat Space Webhook Push (100% Free, Automated Study Alerts)
+  if (profile.googleChatWebhookUrl) {
+    try {
+      const gChatRes = await fetch(profile.googleChatWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+        body: JSON.stringify({
+          cardsV2: [
+            {
+              cardId: `server_alert_${Date.now()}`,
+              card: {
+                header: {
+                  title: subject,
+                  subtitle: 'StudyFlow Automated Academic Dispatch',
+                  imageUrl: 'https://fonts.gstatic.com/s/i/short-term/release/googlesymbols/school/default/48px.svg',
+                  imageType: 'SQUARE'
+                },
+                sections: [
+                  {
+                    widgets: [
+                      {
+                        textParagraph: {
+                          text: text.replace(/\n/g, '<br>')
+                        }
+                      },
+                      {
+                        buttonList: {
+                          buttons: [
+                            {
+                              text: '⏱️ Open 25m Focus Timer',
+                              onClick: {
+                                openLink: {
+                                  url: `${appUrl || 'https://prepforge.app'}?action=start_timer&duration=25`
+                                }
+                              }
+                            },
+                            {
+                              text: '📊 View Study Workstation',
+                              onClick: {
+                                openLink: {
+                                  url: appUrl || 'https://prepforge.app'
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      });
+      if (gChatRes.ok) {
+        channelsDispatched.push('Google Chat Space Push');
+      }
+    } catch (gChatErr: any) {
+      console.warn('[NotificationEngine] Google Chat dispatch error:', gChatErr);
     }
   }
 

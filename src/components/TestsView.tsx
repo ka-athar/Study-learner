@@ -43,6 +43,7 @@ import { MCQExamAutopsyModal } from './MCQExamAutopsyModal';
 import { sendTestImprovementEmail, getOrRequestGmailToken, getCachedGmailToken } from '../lib/gmailService';
 import { findMatchingTopic, parseMultiTopicQuery, calculateScorePercentage, applyTestScoreToSyllabus } from '../lib/topicLinker';
 import { postTestToGoogleClassroom, getOrRequestClassroomToken, getCachedClassroomToken } from '../lib/googleClassroomService';
+import { addAcademicAnnouncement } from '../lib/academicAnnouncementService';
 
 interface TestsViewProps {
   subjects: Subject[];
@@ -421,6 +422,24 @@ export const TestsView: React.FC<TestsViewProps> = ({
 
     // 5. Save test result into Vault
     onAddTestResult(newTest);
+
+    // Auto-post to Academic Notice Board Wall
+    try {
+      addAcademicAnnouncement({
+        title: `📝 Test Logged: ${finalTestTitle} (${newTest.score || 'Recorded'})`,
+        content: `Completed ${newTest.subjectName || 'Subject'} assessment on ${newTest.date || 'today'}. Score: ${newTest.score || 'Recorded'}. Key concepts: ${newTest.topicNames?.join(', ') || 'General review'}. View details in Test Vault.`,
+        category: 'exam',
+        priority: 'important',
+        author: 'Test & Mock Vault',
+        pinned: false,
+        read: false,
+        actionLabel: 'View Test Vault',
+        source: 'system'
+      });
+    } catch (annErr) {
+      console.warn('Notice board auto-post note:', annErr);
+    }
+
     setIsAnalyzing(false);
     setIsAddOpen(false);
 

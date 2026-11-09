@@ -83,6 +83,7 @@ interface Revision137CenterViewProps {
   onOpenCheatSheetForTopic?: (subjectName: string, topicName: string) => void;
   onAwardXP?: (amount: number, reason?: string) => void;
   onUpdateTopicStatus?: (subjectName: string, topicName: string, status: any) => Promise<void>;
+  onOpenBatchTriage?: () => void;
 }
 
 export const Revision137CenterView: React.FC<Revision137CenterViewProps> = ({
@@ -102,7 +103,8 @@ export const Revision137CenterView: React.FC<Revision137CenterViewProps> = ({
   onNavigateTab,
   onOpenCheatSheetForTopic,
   onAwardXP,
-  onUpdateTopicStatus
+  onUpdateTopicStatus,
+  onOpenBatchTriage
 }) => {
   const [activeStageFilter, setActiveStageFilter] = useState<'all' | 'due_today' | 'due_tomorrow' | 'day1' | 'day3' | 'day7' | 'overdue' | 'completed'>('due_today');
   const [searchQuery, setSearchQuery] = useState('');
@@ -370,6 +372,22 @@ export const Revision137CenterView: React.FC<Revision137CenterViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            {onOpenBatchTriage && (
+              <button
+                onClick={onOpenBatchTriage}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-rose-600 hover:from-indigo-500 hover:to-rose-500 text-white font-bold text-xs shadow-lg transition active:scale-95 cursor-pointer"
+                title="Open rapid-fire batch triage deck for today's spaced revisions"
+              >
+                <RotateCcw className="w-4 h-4 animate-spin-slow" />
+                <span>⚡ Batch Triage Due Today (Option 5)</span>
+                {dueTodayCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full bg-white/20 text-white text-[10px] font-extrabold">
+                    {dueTodayCount} Due
+                  </span>
+                )}
+              </button>
+            )}
+
             <button
               onClick={() => {
                 setSelectedCardForTransfer(null);

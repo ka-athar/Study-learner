@@ -22,7 +22,9 @@ import {
   HardDrive,
   Cloud,
   FileCheck,
-  History
+  History,
+  Printer,
+  Calendar
 } from 'lucide-react';
 import { 
   Subject, 
@@ -43,6 +45,7 @@ import {
   BatchUploadProgress 
 } from '../lib/db';
 import { loadMistakes, saveMistakes } from '../lib/mistakeVaultStorage';
+import { openStudyKitPrintWindow } from '../lib/studyKitExportService';
 
 export interface BackupSnapshot {
   id: string;
@@ -315,6 +318,33 @@ export const DataPortabilityView: React.FC<DataPortabilityViewProps> = ({
       showToast('Anki TSV flashcards exported successfully!');
     } catch (err: any) {
       showToast(`Flashcard TSV export failed: ${err.message}`, 'error');
+    }
+  };
+
+  // 5. Export Printable Monthly Academic Wall Calendar with Check-Off Boxes
+  const handlePrintWallCalendar = () => {
+    try {
+      openStudyKitPrintWindow({
+        format: 'monthly_wall_calendar',
+        selectedSubjectNames: subjects ? subjects.map(s => s.name) : [],
+        includeFormulas: true,
+        includeMnemonics: true,
+        includeFlashcards: false,
+        includeExams: true,
+        columns: 2,
+        fontSize: 'standard',
+        title: `Academic Monthly Wall Calendar — ${new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}`,
+        notes: 'Monthly physical study calendar with daily check-off boxes: [ ] Met 3h Target, [ ] Active Recall, [ ] MCQ Sprint, [ ] Done ✓.'
+      }, {
+        subjects: subjects || [],
+        flashcardDecks: flashcardDecks || [],
+        plans: plans || [],
+        userProfile: userProfile || null,
+        revisions: revisions || []
+      });
+      showToast('Printable Monthly Wall Calendar generated! Opening print preview...');
+    } catch (err: any) {
+      showToast(`Wall calendar generation failed: ${err.message}`, 'error');
     }
   };
 
@@ -805,6 +835,39 @@ export const DataPortabilityView: React.FC<DataPortabilityViewProps> = ({
               >
                 <Layers className="w-4 h-4" />
                 <span>Export Anki Cards (.tsv)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Card 5: Printable Academic Monthly Wall Calendar (Check-Off Boxes) */}
+          <div className="bg-surface border border-theme rounded-3xl p-6 shadow-xs space-y-4 flex flex-col justify-between md:col-span-2">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="p-2.5 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+                  <Printer className="w-5 h-5" />
+                </span>
+                <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-500/20 flex items-center gap-1">
+                  <Calendar className="w-3 h-3" />
+                  <span>A4 Wall Poster • Daily Mark-Off Checkboxes</span>
+                </span>
+              </div>
+              <h3 className="text-base font-bold text-primary">Printable Monthly Academic Wall Calendar</h3>
+              <p className="text-xs text-muted leading-relaxed">
+                Full-page monthly printable wall calendar designed to stick on your study wall. Features daily tactile mark-off checkboxes for: 
+                <span className="font-semibold text-primary"> [ ] Met Daily Study Target (3h), [ ] Active Recall, [ ] MCQ Sprint, [ ] Done ✓</span>, plus scheduled topics, upcoming exam countdown badges, and monthly accountability &amp; mentor signature audit.
+              </p>
+            </div>
+            <div className="pt-3 border-t border-theme flex flex-col sm:flex-row items-center justify-between gap-3">
+              <span className="text-[11px] font-mono text-muted">
+                Optimized for standard A4 and Letter paper (monochrome or color ink)
+              </span>
+              <button
+                type="button"
+                onClick={handlePrintWallCalendar}
+                className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-xs active:scale-95"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Print Monthly Wall Calendar (Boxes)</span>
               </button>
             </div>
           </div>

@@ -17,9 +17,11 @@ import {
   Check,
   ChevronDown,
   Info,
-  Zap
+  Zap,
+  ShieldCheck
 } from 'lucide-react';
-import { Subject, RevisionItem, StudySession, ActiveTab } from '../types';
+import { Subject, RevisionItem, StudySession, ActiveTab, TopicMasteryVerification } from '../types';
+import { MasteryVerificationModal } from './MasteryVerificationModal';
 
 interface RevisionViewProps {
   subjects: Subject[];
@@ -35,6 +37,7 @@ interface RevisionViewProps {
     notes?: string
   ) => Promise<void> | void;
   onNavigateTab?: (tab: ActiveTab) => void;
+  onUpdateSubjects?: (newSubjects: Subject[]) => void;
 }
 
 export const RevisionView: React.FC<RevisionViewProps> = ({
@@ -46,7 +49,8 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
   onDeleteRevision,
   onAddRevisionTopic,
   onRescheduleRevision,
-  onNavigateTab
+  onNavigateTab,
+  onUpdateSubjects
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'completed' | 'timed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -54,6 +58,14 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [reschedulingItemId, setReschedulingItemId] = useState<string | null>(null);
   const [customRescheduleDate, setCustomRescheduleDate] = useState<string>('');
+
+  // Prove Mastery Verification state for Revision items
+  const [verifyingRevisionTopic, setVerifyingRevisionTopic] = useState<{
+    subject: Subject;
+    chapterName: string;
+    topic: any;
+    revisionId: string;
+  } | null>(null);
 
   // Form state for adding custom revision topic
   const [newSubject, setNewSubject] = useState(subjects[0]?.name || '');
@@ -564,6 +576,33 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
                       <span>5m Recall</span>
                     </button>
 
+                    {/* Prove Mastery / Verify Mastery Button */}
+                    <button
+                      onClick={() => {
+                        const curSub = subjects.find(s => s.name === item.subjectName) || subjects[0];
+                        const curChap = curSub?.chapters.find(c => !item.chapterName || c.name === item.chapterName) || curSub?.chapters[0];
+                        const curTop = curChap?.topics.find(t => t.name === item.topicName) || {
+                          id: `rev-${item.id}`,
+                          name: item.topicName,
+                          status: isDone ? 'Mastered' : 'Completed',
+                          subtopics: []
+                        };
+                        if (curSub) {
+                          setVerifyingRevisionTopic({
+                            subject: curSub,
+                            chapterName: curChap?.name || 'General',
+                            topic: curTop,
+                            revisionId: item.id
+                          });
+                        }
+                      }}
+                      className="px-3 py-2 bg-teal-50 hover:bg-teal-100 border border-teal-200 text-teal-800 text-xs font-bold rounded-full transition flex items-center gap-1 cursor-pointer active:scale-95 shadow-2xs"
+                      title="Prove topic mastery through subject-adapted verification assessment"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
+                      <span>Verify Mastery 🛡️</span>
+                    </button>
+
                     {/* Cards button */}
                     {onNavigateTab && (
                       <button
@@ -879,6 +918,46 @@ export const RevisionView: React.FC<RevisionViewProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Prove Mastery Verification Modal */}
+      {verifyingRevisionTopic && (
+        <MasteryVerificationModal
+          isOpen={!!verifyingRevisionTopic}
+          onClose={() => setVerifyingRevisionTopic(null)}
+          subject={verifyingRevisionTopic.subject}
+          chapterName={verifyingRevisionTopic.chapterName}
+          topic={verifyingRevisionTopic.topic}
+          onVerificationComplete={(subId, topId, verification, newStatus) => {
+            if (newStatus === 'Mastered') {
+              onMarkRevisionDone(verifyingRevisionTopic.revisionId);
+            }
+            if (onUpdateSubjects) {
+              const updated = subjects.map(s => {
+                if (s.id !== subId) return s;
+                return {
+                  ...s,
+                  chapters: s.chapters.map(c => ({
+                    ...c,
+                    topics: c.topics.map(t => {
+                      if (t.id !== topId && t.name !== verifyingRevisionTopic.topic.name) return t;
+                      return {
+                        ...t,
+                        status: newStatus,
+                        progressionState: newStatus === 'Mastered' ? 'Mastered' : 'Tested',
+                        verifiedMasteryScore: verification.scorePercentage,
+                        verifiedAt: verification.verifiedAt,
+                        masteryVerification: verification,
+                        lastStudiedAt: new Date().toISOString().split('T')[0]
+                      };
+                    })
+                  }))
+                };
+              });
+              onUpdateSubjects(updated);
+            }
+          }}
+        />
       )}
     </div>
   );

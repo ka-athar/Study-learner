@@ -10,7 +10,8 @@ import {
   StudyPlan,
   Assignment,
   WeeklyReviewItem,
-  WeeklyReviewRecord
+  WeeklyReviewRecord,
+  FlashcardDeck
 } from '../types';
 
 export const STUDY_HABIT_DEFINITIONS: StudyHabitDefinition[] = [
@@ -147,6 +148,7 @@ export function syncHabitsWithAppData(params: {
   revisions?: RevisionItem[];
   plans?: StudyPlan[];
   assignments?: Assignment[];
+  flashcardDecks?: FlashcardDeck[];
   existingEntries?: Record<string, DailyHabitEntry>;
   targetStudyHours?: number;
 }): { updatedEntries: Record<string, DailyHabitEntry>; currentEntry: DailyHabitEntry } {
@@ -230,18 +232,31 @@ export function syncHabitsWithAppData(params: {
     }
   }
 
-  // 5. Active Recall: auto-completed if flashcard sessions or blurt recall logged in notes/sessions
+  // 5. Active Recall: auto-completed if flashcard sessions or blurt recall logged in notes/sessions OR cards reviewed today
   const recallSessions = matchingSessions.filter(s => 
     (s.chapterName && s.chapterName.toLowerCase().includes('recall')) ||
-    (s.notes && (s.notes.toLowerCase().includes('blurt') || s.notes.toLowerCase().includes('flashcard') || s.notes.toLowerCase().includes('feynman')))
+    (s.notes && (s.notes.toLowerCase().includes('blurt') || s.notes.toLowerCase().includes('flashcard') || s.notes.toLowerCase().includes('feynman') || s.notes.toLowerCase().includes('recall')))
   );
-  if (recallSessions.length > 0) {
+
+  const decksReviewedToday = (params.flashcardDecks || []).filter(d => 
+    d.cards?.some(c => c.lastReviewedAt && c.lastReviewedAt.startsWith(targetDate)) ||
+    (d.updatedAt && d.updatedAt.startsWith(targetDate) && d.cards?.some(c => (c.repetitions || 0) > 0))
+  );
+
+  if (recallSessions.length > 0 || decksReviewedToday.length > 0) {
     if (!habits.active_recall.manualOverride || !habits.active_recall.completed) {
+      const cardsReviewedCount = decksReviewedToday.reduce((acc, d) => 
+        acc + (d.cards?.filter(c => c.lastReviewedAt && c.lastReviewedAt.startsWith(targetDate)).length || 0), 0
+      );
+      const detail = recallSessions.length > 0
+        ? `${recallSessions.length} active recall / blurt session${recallSessions.length > 1 ? 's' : ''}`
+        : `${decksReviewedToday.length} flashcard deck${decksReviewedToday.length > 1 ? 's' : ''} reviewed (${cardsReviewedCount || 'active'} cards)`;
+
       habits.active_recall = {
         completed: true,
         autoCompleted: true,
         completedAt: habits.active_recall.completedAt || new Date().toISOString(),
-        sourceDetails: `${recallSessions.length} active recall / blurt session${recallSessions.length > 1 ? 's' : ''}`,
+        sourceDetails: detail,
         manualOverride: habits.active_recall.manualOverride
       };
     }
@@ -349,6 +364,44 @@ export function toggleHabitManual(
 
   const completedCount = Object.values(updatedHabits).filter(h => h.completed).length;
   const overallProgressPercentage = Math.round((completedCount / STUDY_HABIT_DEFINITIONS.length) * 100);
+
+  const updatedEntry: DailyHabitEntry = {
+    ...existing,
+    habits: updatedHabits,
+    overallProgressPercentage,
+    updatedAt: new Date().toISOString()
+  };
+
+  allEntries[dateStr] = updatedEntry;
+  saveAllHabitEntries(allEntries);
+  return updatedEntry;
+}
+
+/**
+  * Sets all habits for a given date as completed or reset.
+  */
+export function setAllHabitsState(dateStr: string, completed: boolean): DailyHabitEntry {
+  const allEntries = loadAllHabitEntries();
+  const existing = allEntries[dateStr] || {
+    date: dateStr,
+    habits: createEmptyHabitState(),
+    plannedMinutes: 180,
+    completedMinutes: 0
+  };
+
+  const updatedHabits = { ...existing.habits };
+  for (const def of STUDY_HABIT_DEFINITIONS) {
+    const cur = updatedHabits[def.id] || { completed: false };
+    updatedHabits[def.id] = {
+      ...cur,
+      completed,
+      manualOverride: true,
+      completedAt: completed ? new Date().toISOString() : undefined,
+      sourceDetails: completed ? 'Marked complete manually' : undefined
+    };
+  }
+
+  const overallProgressPercentage = completed ? 100 : 0;
 
   const updatedEntry: DailyHabitEntry = {
     ...existing,
@@ -754,8 +807,9 @@ export function computeConsistencyStats(
     const entry = entries[dStr];
     const hasActivity = entry && Object.values(entry.habits || {}).some(h => h.completed);
     const hasSession = sessions.some(s => s.date === dStr && (s.durationMinutes || 0) > 0);
+    const isFrozen = getStreakFreezeDates().includes(dStr);
 
-    if (hasActivity || hasSession) {
+    if (hasActivity || hasSession || isFrozen) {
       currentStreak++;
       checkDate.setDate(checkDate.getDate() - 1);
     } else {
@@ -845,4 +899,53 @@ export function computeConsistencyStats(
     plannedStudyMinutesThisMonth: plannedMonthly,
     topProductiveDayOfWeek: dowNames[maxDowIdx]
   };
+}
+
+export const STREAK_FREEZE_STORAGE_KEY = 'studyflow_habit_streak_freeze_v1';
+
+export function getStreakFreezeDates(): string[] {
+  try {
+    const raw = localStorage.getItem(STREAK_FREEZE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function activateStreakFreeze(dateStr: string): { success: boolean; message: string } {
+  try {
+    const currentFreezes = getStreakFreezeDates();
+    if (currentFreezes.includes(dateStr)) {
+      return { success: true, message: `Streak freeze already active for ${dateStr}.` };
+    }
+
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const recentFreezes = currentFreezes.filter(d => new Date(d) >= oneWeekAgo);
+
+    if (recentFreezes.length >= 1) {
+      return { 
+        success: false, 
+        message: 'Weekly streak freeze limit reached (1 freeze allowed per 7 days). Keep going!' 
+      };
+    }
+
+    currentFreezes.push(dateStr);
+    localStorage.setItem(STREAK_FREEZE_STORAGE_KEY, JSON.stringify(currentFreezes));
+    return { success: true, message: `🛡️ Streak Freeze activated for ${dateStr}! Your consistency streak is protected.` };
+  } catch (e: any) {
+    return { success: false, message: e.message || 'Could not activate streak freeze.' };
+  }
+}
+
+export function isStreakFreezeAvailable(): boolean {
+  try {
+    const currentFreezes = getStreakFreezeDates();
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const recent = currentFreezes.filter(d => new Date(d) >= oneWeekAgo);
+    return recent.length === 0;
+  } catch {
+    return true;
+  }
 }

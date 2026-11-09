@@ -218,19 +218,19 @@ export const WeeklyAIProgressReportModal: React.FC<WeeklyAIProgressReportModalPr
 
     try {
       const newDeck: Omit<FlashcardDeck, 'id'> = {
-        userId: userProfile?.id || 'local-user',
         title: `${item.topicName} — Remediation Drill`,
         subjectName: item.subjectName,
         chapterName: item.chapterName || '',
         cards: [
           {
             id: `card-${Date.now()}-1`,
-            question: item.remediation?.flashcardFront || `Explain the core principle of ${item.topicName}.`,
-            answer: item.remediation?.flashcardBack || item.keyConceptToReview || 'Review core formulas and definitions.',
-            masteryLevel: 'learning'
+            front: item.remediation?.flashcardFront || `Explain the core principle of ${item.topicName}.`,
+            back: item.remediation?.flashcardBack || item.keyConceptToReview || 'Review core formulas and definitions.',
+            mastered: false
           }
         ],
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
 
       await onSaveFlashcardDeck(newDeck);

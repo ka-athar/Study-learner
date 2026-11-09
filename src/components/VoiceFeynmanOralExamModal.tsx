@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Subject, UserProfile } from '../types';
 import { apiSocraticOralTurn } from '../lib/aiApi';
+import { transcribeAudioWithGemini, AudioRecorderController } from '../lib/transcriptionService';
 import confetti from 'canvas-confetti';
 
 interface VoiceFeynmanOralExamModalProps {
@@ -64,6 +65,9 @@ export const VoiceFeynmanOralExamModal: React.FC<VoiceFeynmanOralExamModalProps>
   const [transcript, setTranscript] = useState<string>('');
   const [speechSupported, setSpeechSupported] = useState<boolean>(true);
   const recognitionRef = useRef<any>(null);
+  const audioRecorderRef = useRef<AudioRecorderController | null>(null);
+  const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
+  const [isCookingWithGemini, setIsCookingWithGemini] = useState<boolean>(false);
 
   // Audio Speech Synthesis (TTS)
   const [voiceEnabled, setVoiceEnabled] = useState<boolean>(true);
@@ -144,27 +148,67 @@ export const VoiceFeynmanOralExamModal: React.FC<VoiceFeynmanOralExamModalProps>
     window.speechSynthesis.speak(utterance);
   };
 
-  const handleToggleListening = () => {
-    if (!recognitionRef.current) {
-      setUseKeyboard(true);
-      return;
-    }
-
+  const handleToggleListening = async () => {
     if (isListening) {
-      recognitionRef.current.stop();
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+      }
       setIsListening(false);
+
+      if (audioRecorderRef.current && audioRecorderRef.current.isActive()) {
+        try {
+          const blob = await audioRecorderRef.current.stop();
+          setRecordedAudioBlob(blob);
+        } catch (e) {
+          console.warn('Audio recorder stop error:', e);
+        }
+      }
     } else {
       if (isAiSpeaking && typeof window !== 'undefined') {
         window.speechSynthesis.cancel();
         setIsAiSpeaking(false);
       }
       setTranscript('');
-      try {
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch (err) {
-        console.warn('Recognition start issue:', err);
+      setRecordedAudioBlob(null);
+
+      // Start browser speech recognition if supported
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.start();
+        } catch (err) {
+          console.warn('Recognition start issue:', err);
+        }
       }
+
+      // Start high-fidelity audio recorder for Gemini AI cooking
+      try {
+        const recorder = new AudioRecorderController();
+        await recorder.start();
+        audioRecorderRef.current = recorder;
+      } catch (recErr) {
+        console.warn('MediaRecorder init error:', recErr);
+      }
+
+      setIsListening(true);
+    }
+  };
+
+  const handleCookWithGemini = async () => {
+    if (!recordedAudioBlob) return;
+    setIsCookingWithGemini(true);
+    try {
+      const cooked = await transcribeAudioWithGemini(recordedAudioBlob, {
+        subject: selectedSubject,
+        topic: conceptName,
+        taskType: 'oral_exam'
+      });
+      if (cooked.polishedText || cooked.rawTranscript) {
+        setTranscript(cooked.polishedText || cooked.rawTranscript);
+      }
+    } catch (err: any) {
+      console.warn('Gemini transcription in oral viva modal:', err);
+    } finally {
+      setIsCookingWithGemini(false);
     }
   };
 
@@ -553,6 +597,18 @@ export const VoiceFeynmanOralExamModal: React.FC<VoiceFeynmanOralExamModalProps>
                         {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                         <span>{isListening ? 'Stop & Review Spoken Answer' : 'Speak Answer'}</span>
                       </button>
+
+                      {recordedAudioBlob && !isListening && (
+                        <button
+                          onClick={handleCookWithGemini}
+                          disabled={isCookingWithGemini}
+                          className="px-4 py-3 rounded-2xl bg-orange-500 hover:bg-orange-600 text-stone-950 font-bold text-xs flex items-center gap-1.5 transition shadow-xs cursor-pointer disabled:opacity-50"
+                          title="Transcribe recorded speech with Gemini AI"
+                        >
+                          <Flame className="w-4 h-4 fill-current" />
+                          <span>{isCookingWithGemini ? 'Gemini Cooking...' : 'Cook with Gemini 🔥'}</span>
+                        </button>
+                      )}
 
                       {transcript && (
                         <button

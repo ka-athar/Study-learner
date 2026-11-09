@@ -26,9 +26,10 @@ import {
   Brain,
   ExternalLink,
   GraduationCap,
-  Camera
+  Camera,
+  ShieldCheck
 } from 'lucide-react';
-import { Subject, Chapter, Topic, TopicStatus, Subtopic, TestResult, StorageVault, EXAM_BOARD_PRESETS, ExamBoard } from '../types';
+import { Subject, Chapter, Topic, TopicStatus, Subtopic, TestResult, StorageVault, EXAM_BOARD_PRESETS, ExamBoard, TopicMasteryVerification } from '../types';
 import { apiParseSyllabus } from '../lib/aiApi';
 import { listDriveFiles, downloadDriveFileContent, downloadDriveFileBinary, DriveFileItem } from '../lib/googleDriveService';
 import { getOrRequestWorkspaceToken } from '../lib/googleAuthService';
@@ -37,6 +38,7 @@ import { LogTopicTestModal } from './LogTopicTestModal';
 import { TopicTargetedTestModal } from './TopicTargetedTestModal';
 import { ExamPresetsModal } from './ExamPresetsModal';
 import { SyncInspectorDetails } from './SyncInspectorModal';
+import { MasteryVerificationModal } from './MasteryVerificationModal';
 
 const PRESET_EMOJIS = [
   '🧬', '🧪', '⚛️', '📖', '📝', '🇵🇰', '☪️', '📐', 
@@ -176,6 +178,13 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
     topicId?: string;
   } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Prove Mastery Verification Workflow State
+  const [verifyingTopic, setVerifyingTopic] = useState<{
+    subject: Subject;
+    chapterName: string;
+    topic: Topic;
+  } | null>(null);
 
   const activeSubject = subjects.find(s => s.id === activeSubjectId) || subjects[0];
   const isUrduSubject = activeSubject ? (activeSubject.language === 'ur' || /[\u0600-\u06FF]/.test(activeSubject.name)) : false;
@@ -341,8 +350,28 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
     setSelectedFile(null);
   };
 
-  // Update topic status
+  // Update topic status with strict Mastery Verification guard
   const handleTopicStatusChange = (subjectId: string, chapterId: string, topicId: string, newStatus: TopicStatus) => {
+    // If student attempts to mark as 'Mastered', enforce Prove Mastery workflow
+    if (newStatus === 'Mastered') {
+      const curSub = subjects.find(s => s.id === subjectId);
+      const curCh = curSub?.chapters.find(c => c.id === chapterId);
+      const curTop = curCh?.topics.find(t => t.id === topicId);
+      
+      // If already verified with score >= 80, allow status
+      if (curTop?.masteryVerification?.passed && curTop.status === 'Mastered') {
+        // already verified
+      } else if (curSub && curCh && curTop) {
+        // Intercept: Launch Prove Mastery assessment workflow!
+        setVerifyingTopic({
+          subject: curSub,
+          chapterName: curCh.name,
+          topic: curTop
+        });
+        return; // Halt manual switch!
+      }
+    }
+
     const updated = subjects.map(s => {
       if (s.id !== subjectId) return s;
       return {
@@ -356,11 +385,42 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
               return { 
                 ...t, 
                 status: newStatus, 
+                progressionState: newStatus === 'Completed' ? 'Practiced' : (newStatus === 'Mastered' ? 'Mastered' : 'Studied'),
                 lastStudiedAt: newStatus === 'Completed' || newStatus === 'Mastered' ? new Date().toISOString().split('T')[0] : t.lastStudiedAt 
               };
             })
           };
         })
+      };
+    });
+    onUpdateSubjects(updated);
+  };
+
+  const handleVerificationComplete = (
+    subjectId: string,
+    topicId: string,
+    verification: TopicMasteryVerification,
+    newStatus: 'Mastered' | 'Completed' | 'Needs Revision'
+  ) => {
+    const updated = subjects.map(s => {
+      if (s.id !== subjectId) return s;
+      return {
+        ...s,
+        chapters: s.chapters.map(c => ({
+          ...c,
+          topics: c.topics.map(t => {
+            if (t.id !== topicId) return t;
+            return {
+              ...t,
+              status: newStatus,
+              progressionState: newStatus === 'Mastered' ? 'Mastered' : 'Tested',
+              verifiedMasteryScore: verification.scorePercentage,
+              verifiedAt: verification.verifiedAt,
+              masteryVerification: verification,
+              lastStudiedAt: new Date().toISOString().split('T')[0]
+            };
+          })
+        }))
       };
     });
     onUpdateSubjects(updated);
@@ -1220,6 +1280,31 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
                                       <span>Log Test</span>
                                     </button>
 
+                                    {/* Prove Mastery / Verify Mastery Button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setVerifyingTopic({
+                                          subject: activeSubject,
+                                          chapterName: chapter.name,
+                                          topic
+                                        });
+                                      }}
+                                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition flex items-center gap-1 cursor-pointer active:scale-95 shadow-2xs ${
+                                        topic.status === 'Mastered'
+                                          ? 'bg-teal-500/15 border-teal-500/40 text-teal-800 dark:text-teal-200'
+                                          : 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-900 dark:text-amber-200'
+                                      }`}
+                                      title={topic.status === 'Mastered' ? 'Mastery verified! Click to re-verify.' : 'Prove Mastery: complete subject-adapted verification assessment to unlock Mastered status'}
+                                    >
+                                      <ShieldCheck className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0" />
+                                      <span>
+                                        {topic.status === 'Mastered' 
+                                          ? `Verified ⭐ (${topic.verifiedMasteryScore || 92}%)` 
+                                          : 'Verify Mastery 🛡️'}
+                                      </span>
+                                    </button>
+
                                     <select
                                       value={topic.status}
                                       onChange={(e) => handleTopicStatusChange(activeSubject.id, chapter.id, topic.id, e.target.value as TopicStatus)}
@@ -1230,7 +1315,9 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
                                       <option value="Completed" className="bg-card text-emerald-800">Completed</option>
                                       <option value="Needs Revision" className="bg-card text-purple-800">Needs Revision</option>
                                       <option value="Weak" className="bg-card text-rose-800">Weak</option>
-                                      <option value="Mastered" className="bg-card text-teal-800 dark:text-teal-300">Mastered ⭐</option>
+                                      <option value="Mastered" className="bg-card text-teal-800 dark:text-teal-300">
+                                        {topic.status === 'Mastered' ? 'Mastered ⭐ (Verified)' : 'Prove Mastery ⭐ (Requires Assessment)'}
+                                      </option>
                                     </select>
 
                                     <button
@@ -1900,6 +1987,18 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
         onClose={() => setIsPresetsModalOpen(false)}
         onApplyPreset={handleApplyPreset}
       />
+
+      {/* Prove Mastery Verification Modal */}
+      {verifyingTopic && (
+        <MasteryVerificationModal
+          isOpen={!!verifyingTopic}
+          onClose={() => setVerifyingTopic(null)}
+          subject={verifyingTopic.subject}
+          chapterName={verifyingTopic.chapterName}
+          topic={verifyingTopic.topic}
+          onVerificationComplete={handleVerificationComplete}
+        />
+      )}
     </div>
   );
 };

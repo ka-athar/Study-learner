@@ -11,42 +11,55 @@ let audioContext: AudioContext | null = null;
  * Plays a pleasant, harmonious two-tone notification chime using the Web Audio API.
  * Requires zero external audio files.
  */
+export function isRunningInIframe(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.self !== window.top;
+  } catch (e) {
+    return true;
+  }
+}
+
+/**
+ * Plays a pleasant, resonant four-tone notification chime using the Web Audio API.
+ * Resumes audio context if suspended and triggers device vibration.
+ */
 export function playNotificationChime() {
   try {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
 
-    if (!audioContext || audioContext.state === 'suspended') {
+    if (!audioContext) {
       audioContext = new AudioCtx();
+    }
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().catch(() => {});
     }
 
     const now = audioContext.currentTime;
 
-    // First Tone: High C (523.25 Hz)
-    const osc1 = audioContext.createOscillator();
-    const gain1 = audioContext.createGain();
-    osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(523.25, now);
-    gain1.gain.setValueAtTime(0, now);
-    gain1.gain.linearRampToValueAtTime(0.18, now + 0.04);
-    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
-    osc1.connect(gain1);
-    gain1.connect(audioContext.destination);
-    osc1.start(now);
-    osc1.stop(now + 0.3);
+    // Harmonic four-tone chime: C5 (523Hz) -> E5 (659Hz) -> G5 (784Hz) -> High C6 (1046Hz)
+    const freqs = [523.25, 659.25, 783.99, 1046.50];
+    freqs.forEach((freq, idx) => {
+      if (!audioContext) return;
+      const osc = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      const startTime = now + (idx * 0.09);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, startTime);
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(0.24, startTime + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.42);
+      osc.connect(gain);
+      gain.connect(audioContext.destination);
+      osc.start(startTime);
+      osc.stop(startTime + 0.45);
+    });
 
-    // Second Tone: Higher E (659.25 Hz) or G (783.99 Hz)
-    const osc2 = audioContext.createOscillator();
-    const gain2 = audioContext.createGain();
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(659.25, now + 0.12);
-    gain2.gain.setValueAtTime(0, now + 0.12);
-    gain2.gain.linearRampToValueAtTime(0.22, now + 0.16);
-    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
-    osc2.connect(gain2);
-    gain2.connect(audioContext.destination);
-    osc2.start(now + 0.12);
-    osc2.stop(now + 0.48);
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([200, 100, 200, 100, 350]);
+      } catch (e) {}
+    }
   } catch (err) {
     console.warn('[PushNotificationManager] Web Audio chime could not play:', err);
   }
@@ -90,43 +103,68 @@ export interface PushNotificationPayload {
 }
 
 /**
- * Display a native operating system / browser push notification with optional sound and interactive lock-screen action buttons
+ * Display an immediate notification:
+ * 1. Plays harmonic chime & vibration.
+ * 2. Broadcasts in-app Heads-Up Alert HUD so it ALWAYS shows up visually.
+ * 3. Sends native OS desktop notification if permission is granted.
  */
 export function sendNativePushNotification(payload: PushNotificationPayload): boolean {
-  if (!isPushNotificationSupported() || Notification.permission !== 'granted') {
-    return false;
-  }
-
+  // 1. Play sound chime & vibration
   if (payload.playSound !== false) {
     playNotificationChime();
   }
 
-  // Try Service Worker registration first for interactive action buttons
-  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    navigator.serviceWorker.ready.then((registration) => {
-      const options: any = {
-        body: payload.body,
-        icon: '/icon.svg',
-        badge: '/icon.svg',
-        tag: payload.tag || `study-notification-${Date.now()}`,
-        actions: payload.actions || [
-          { action: 'start-timer', title: '⏱️ Start 25m Timer' },
-          { action: 'mark-done', title: '✅ Mark Done' }
-        ],
-        data: {
-          onClickUrl: payload.onClickUrl || '/',
-          ...(payload.data || {})
-        }
-      };
-      (registration as any).showNotification(payload.title, options);
-    }).catch(() => {
-      // Fallback to standard Notification
+  // 2. ALWAYS dispatch in-app Heads-Up Display (HUD) alert so user SEES it instantly on screen!
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('studyplanner:immediate-in-app-alert', { detail: payload }));
+  }
+
+  // 3. Check browser native notification support
+  if (!isPushNotificationSupported()) {
+    return true; // Still delivered via in-app HUD
+  }
+
+  // 4. If permission is granted, dispatch to OS notification center
+  if (Notification.permission === 'granted') {
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.ready.then((registration) => {
+        const options: any = {
+          body: payload.body,
+          icon: '/icon.svg',
+          badge: '/icon.svg',
+          tag: payload.tag || `study-notification-${Date.now()}`,
+          renotify: true,
+          requireInteraction: true,
+          vibrate: [300, 100, 300],
+          actions: payload.actions || [
+            { action: 'start-timer', title: '⏱️ Start 25m Timer' },
+            { action: 'mark-done', title: '✅ Mark Done' }
+          ],
+          data: {
+            onClickUrl: payload.onClickUrl || '/',
+            ...(payload.data || {})
+          }
+        };
+        (registration as any).showNotification(payload.title, options);
+      }).catch(() => {
+        fallbackNotification(payload);
+      });
+    } else {
       fallbackNotification(payload);
-    });
+    }
     return true;
   }
 
-  return fallbackNotification(payload);
+  // 5. If permission is default (never asked), request it!
+  if (Notification.permission === 'default' && !isRunningInIframe()) {
+    Notification.requestPermission().then((perm) => {
+      if (perm === 'granted') {
+        fallbackNotification(payload);
+      }
+    }).catch(() => {});
+  }
+
+  return true;
 }
 
 function fallbackNotification(payload: PushNotificationPayload): boolean {

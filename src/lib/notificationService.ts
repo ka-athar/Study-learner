@@ -1,6 +1,7 @@
 import { ExamDate, Subject, RevisionItem, ExamNotificationSettings } from '../types';
 import { playNotificationChime, sendNativePushNotification, requestPushPermission } from './pushNotificationManager';
 import { getCachedGmailToken, getOrRequestGmailToken, sendDailyAgendaEmail } from './gmailService';
+import { getGoogleChatConfig } from './googleChatService';
 
 export interface DispatchLog {
   id: string;
@@ -121,11 +122,13 @@ export async function syncNotificationConfigToServer(
 ): Promise<boolean> {
   saveLocalNotificationSettings(settings);
   try {
+    const chatCfg = getGoogleChatConfig();
     const res = await fetch('/api/notifications/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...settings,
+        googleChatWebhookUrl: settings.googleChatWebhookUrl || chatCfg.webhookUrl,
         examDates,
         subjects,
         revisionItems
